@@ -1,0 +1,21 @@
+cat > .gitignore << 'EOF'
+# Secrets — never commit these
+.env
+.env.local
+.env*.local
+
+# Dependencies
+node_modules/
+
+# Build output
+.next/
+dist/
+build/
+.vercel
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+EOF
