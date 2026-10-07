@@ -23,7 +23,13 @@
 -- PREREQUISITE — run these lines as their OWN query first, then this file.
 -- A new enum value cannot be used in the transaction that adds it.
 --
---   ALTER TYPE telemetry_status ADD VALUE IF NOT EXISTS 'from_events';
+--   (now executed below, before the transaction)
+
+-- NOTE: in the Supabase SQL editor, run the ALTER TYPE line on its own first,
+-- then run from BEGIN; to COMMIT;. The editor wraps a whole submission in one
+-- transaction, and Postgres cannot use a new enum value in the transaction
+-- that adds it.
+ALTER TYPE telemetry_status ADD VALUE IF NOT EXISTS 'from_events';
 
 BEGIN;
 
