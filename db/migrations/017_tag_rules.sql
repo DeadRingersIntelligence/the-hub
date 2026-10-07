@@ -22,12 +22,17 @@
 -- A new enum value cannot be used in the transaction that adds it, and the
 -- Supabase SQL Editor wraps a whole script in one transaction:
 --
---   ALTER TYPE tag_source ADD VALUE IF NOT EXISTS 'auto_rule';
+--   (now executed below, before the transaction)
 --   (now executed below, outside the transaction)
 
+-- NOTE: in the Supabase SQL editor, run the two ALTER TYPE lines below on
+-- their own first, then run from BEGIN; to COMMIT;. The editor wraps a whole
+-- submission in one transaction, and Postgres cannot use a new enum value in
+-- the transaction that adds it.
 -- Must run outside the transaction: Postgres cannot use a new enum value
 -- in the same transaction that adds it.
 ALTER TYPE history_entity ADD VALUE IF NOT EXISTS 'tag';
+ALTER TYPE tag_source ADD VALUE IF NOT EXISTS 'auto_rule';
 
 BEGIN;
 
