@@ -23,7 +23,11 @@
 -- Supabase SQL Editor wraps a whole script in one transaction:
 --
 --   ALTER TYPE tag_source ADD VALUE IF NOT EXISTS 'auto_rule';
---   ALTER TYPE history_entity ADD VALUE IF NOT EXISTS 'tag';
+--   (now executed below, outside the transaction)
+
+-- Must run outside the transaction: Postgres cannot use a new enum value
+-- in the same transaction that adds it.
+ALTER TYPE history_entity ADD VALUE IF NOT EXISTS 'tag';
 
 BEGIN;
 
