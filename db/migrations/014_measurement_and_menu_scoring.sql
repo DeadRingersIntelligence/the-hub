@@ -59,10 +59,10 @@ WITH shape AS (
   GROUP BY b.id
 )
 UPDATE behaviors b SET measurement_type =
-  CASE WHEN s.top IS NULL OR s.top = 0 THEN 'admin'
-       WHEN s.partials > 0             THEN 'graded'
-       WHEN s.top_is_no                THEN 'inverted'
-       ELSE 'binary' END
+  (CASE WHEN s.top IS NULL OR s.top = 0 THEN 'admin'
+        WHEN s.partials > 0             THEN 'graded'
+        WHEN s.top_is_no                THEN 'inverted'
+        ELSE 'binary' END)::measurement_type
 FROM shape s WHERE s.id = b.id;
 
 -- -----------------------------------------------------------------------------
