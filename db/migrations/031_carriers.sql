@@ -22,7 +22,14 @@
 
 -- PREREQUISITE — run this line as its OWN query first, then this file.
 --
---   ALTER TYPE number_purpose ADD VALUE IF NOT EXISTS 'messaging';
+--   (now executed below, before the transaction)
+
+-- NOTE: in the Supabase SQL editor, run the ALTER TYPE line on its own first,
+-- then run from BEGIN; to COMMIT;. The editor wraps a whole submission in one
+-- transaction, and Postgres cannot use a new enum value in the transaction
+-- that adds it. This was already run by hand against the database; the
+-- IF NOT EXISTS makes it safe to re-run.
+ALTER TYPE number_purpose ADD VALUE IF NOT EXISTS 'messaging';
 
 BEGIN;
 
