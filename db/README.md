@@ -101,3 +101,24 @@ Rules that are refused at write time rather than documented and hoped for:
 - Won revenue can never be imputed from an average
 - A benchmark needs at least three contributing organizations
 - Phone numbers normalize to E.164 on write, everywhere they appear
+
+## SECURITY DEFINER functions
+
+A definer function runs as its owner, so it bypasses RLS entirely. Two things
+go in the same migration that creates one, every time:
+
+1. **A tenancy check inside it.** The policies underneath are not protecting
+   you — that is what the attribute turns off. Any function taking an id must
+   check `is_internal() OR organization_id = current_organization_id()` itself.
+
+2. **An explicit revoke beside the grant.**
+
+   ```sql
+   REVOKE ALL ON FUNCTION my_function(args) FROM PUBLIC, anon;
+   GRANT EXECUTE ON FUNCTION my_function(args) TO authenticated;
+   ```
+
+Postgres grants EXECUTE to PUBLIC by default, and PUBLIC includes `anon`, whose
+key ships in the browser. Granting to `authenticated` **adds** a grant; it does
+not remove that one. Nine functions were reachable by anon before migration 037
+because every one of them had a grant and none had a revoke.
