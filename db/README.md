@@ -122,3 +122,13 @@ Postgres grants EXECUTE to PUBLIC by default, and PUBLIC includes `anon`, whose
 key ships in the browser. Granting to `authenticated` **adds** a grant; it does
 not remove that one. Nine functions were reachable by anon before migration 037
 because every one of them had a grant and none had a revoke.
+
+## Views over `interactions`
+
+**Adding a column to `interactions` means recreating `countable_calls` in the
+same migration.** The view is `SELECT *`, and Postgres expands the `*` when
+the view is created: a later column is simply absent from it, and nothing
+complains. Recreate it with the same `security_invoker`, comment, and
+revoke-then-grant as 043. A reporting view is SELECT only. A plain filter over
+one table is auto-updatable, so the default privileges from 024 would
+otherwise grant writes through it.
