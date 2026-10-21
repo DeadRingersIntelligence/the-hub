@@ -123,6 +123,24 @@ key ships in the browser. Granting to `authenticated` **adds** a grant; it does
 not remove that one. Nine functions were reachable by anon before migration 037
 because every one of them had a grant and none had a revoke.
 
+## Views over a table
+
+`SELECT *` is expanded when a view is created, so a column added to the table
+later is simply absent from the view, and nothing complains. Adding a column
+to one of these tables means recreating its view in the same migration, with
+the same `security_invoker`, comment and revoke-then-grant:
+
+| Table | View | Since |
+|---|---|---|
+| `interactions` | `countable_calls` | 043 |
+| `locations` | `service_locations` | 049 |
+
+**Changing `location_type_is_service()` doesn't update existing rows.**
+`locations.is_service_location` is a stored generated column: computed when a
+row is written, never recomputed. A migration that changes the function must
+rebuild it in the same migration with
+`UPDATE locations SET location_type = location_type;`
+
 ## Views over `interactions`
 
 **Adding a column to `interactions` means recreating `countable_calls` in the
