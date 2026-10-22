@@ -150,3 +150,22 @@ complains. Recreate it with the same `security_invoker`, comment, and
 revoke-then-grant as 043. A reporting view is SELECT only. A plain filter over
 one table is auto-updatable, so the default privileges from 024 would
 otherwise grant writes through it.
+
+## One check, two questions
+
+**When the same check appears in two places and one of them starts refusing
+things that feel wrong, suspect the check is answering two different
+questions rather than one question twice.** It has happened twice:
+
+- `answered_at` vs `connected_at` (025). "Answered" covered both "the system
+  picked up" and "a person picked up". A greeting answers every call at once,
+  so scoring on it would have given every firm with a greeting a perfect
+  answer time.
+- Matching vs saving a number (053). "Is this a staff number" covered both
+  "may a call auto-attach to a contact on it" (any staff entry: no) and "may a
+  contact hold it" (only when every entry is staff: no). A hospice's shared
+  line was refused as a contact because a liaison was listed on it.
+  `contact_for_number()` answers the first, `firm_only_number()` the second.
+
+The fix both times was to name the two questions and give each its own column
+or function, not to loosen the one check until it stopped complaining.
