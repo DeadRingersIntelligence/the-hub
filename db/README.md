@@ -29,6 +29,34 @@ without RLS" is correct. If it does contain `CREATE TABLE`, read it first.
 **The editor rejects files over roughly 1 MB.** That is why migration 013 is
 split into six parts. Run them in letter order.
 
+## Which database is which
+
+Two Supabase projects. What follows was read from them, from the Vercel
+project and from the app's own bundles on 30 October 2026; check again before
+relying on it if much has changed since.
+
+- `dead-ringers-hub` (`rnevplbtsilwatvyqmrg`) is staging. A migration runs
+  here first.
+- `hellophone-production` (`mrmjpqjarlrkyccejvjf`) is production: the firms'
+  real calls and contacts.
+
+The SQL editor's tab title names the project. Read it before pressing Run.
+
+How the app (Vercel project `hellophone`) reaches them:
+
+- Production deploys from `main`, at `hellophone-one.vercel.app`, and uses
+  production.
+- A preview of any other branch uses staging, through the Preview
+  environment's variables. Seen on the `conversion-and-contacts` preview,
+  which loaded from `rnevplbtsilwatvyqmrg`.
+- Except `stage-1-in-call`. It has branch-only Preview overrides, added 27
+  October and copied from Production, so its previews use production: anything
+  done in them writes to live data. That branch's `CLAUDE.md` says why; the
+  overrides go when it merges.
+- `SUPABASE_SERVICE_ROLE_KEY` and `DIALSTACK_WEBHOOK_SECRET` are set on
+  Production only. No preview can take in a real call, so real calls reach
+  only the production database.
+
 ## Order
 
 | # | File | What it establishes |
