@@ -196,9 +196,36 @@ before `058` but applied after it says something untrue about when it ran. A
 timestamp says only when it was written, which is all a filename can honestly
 claim.
 
-051 (merge chains): drafted, never run on either database, no file in the-hub.
-052–055 each state in their headers that they don't need it; nothing has been
-checked for 057 or 058.
+051 (merge chains): drafted before 052 ran on 22 October, never run on either
+database, no file in the-hub. When it's needed it is written fresh against the
+schema as it then is, not recovered from the draft, which predates 052–058 and
+20261030T1500. 052–055 each state in their headers that they don't need it;
+nothing has been checked for 057 or 058.
+
+What was read from both databases on 30 October:
+
+- `merge_contacts` sets `merged_into` on the contact it merges away, but
+  doesn't repoint contacts already merged into that one, and doesn't refuse a
+  survivor that is itself merged. Merging A into B, then B into C, leaves A
+  pointing at B.
+- Decedents have no merge function (the only merge functions are
+  `merge_contacts` and `merge_candidates`). Whatever sets
+  `decedents.merged_into`, nothing guards it: no check, no trigger.
+- Readers resolve one hop with `COALESCE(merged_into, id)`, among them
+  `create_case_for_call` (057, decedents) and `save_wrap_up` (053, contacts).
+  That is right only while no chain exists. Other readers weren't looked for.
+
+Deferring 051 is safe only while there are no chains. On 30 October there were
+none on either database, for contacts or decedents. Nothing prevents one
+forming — the next `merge_contacts` call can make one — and nothing detects
+it. So check, rather than assume:
+
+```sql
+SELECT count(*) FROM contacts a JOIN contacts b ON b.id = a.merged_into
+ WHERE b.merged_into IS NOT NULL;
+SELECT count(*) FROM decedents a JOIN decedents b ON b.id = a.merged_into
+ WHERE b.merged_into IS NOT NULL;
+```
 
 ## Authorship, and review before the run
 
