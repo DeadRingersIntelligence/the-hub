@@ -196,6 +196,10 @@ before `058` but applied after it says something untrue about when it ran. A
 timestamp says only when it was written, which is all a filename can honestly
 claim.
 
+051 (merge chains): drafted, never run on either database, no file in the-hub.
+052–055 each state in their headers that they don't need it; nothing has been
+checked for 057 or 058.
+
 ## Authorship, and review before the run
 
 The migration is written by whoever will apply it.
@@ -222,6 +226,14 @@ Why the split at all: the session that can commit and run is the one that can
 see what is actually there, and the session that can't is the one with no
 stake in getting it applied. Each is a poor reviewer of its own work for
 opposite reasons.
+
+The record of what ran is the `BEGIN;` … `COMMIT;` body. Once a migration has
+run, annotate it, don't amend it. A commented-out verification block never ran
+as part of the migration; it's a tool for later runs, so it may be fixed in
+place, with a note in the file's header saying what changed and why. If a
+result from the old block has already been recorded anywhere, the note says
+so: a verification output is only meaningful alongside the version of the
+block that produced it.
 
 ## A comment states what the code proves, not what you concluded
 
