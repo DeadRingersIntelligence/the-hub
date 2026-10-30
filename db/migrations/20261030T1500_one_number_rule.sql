@@ -6,6 +6,17 @@
 -- would say something untrue about the order. First file under the timestamp
 -- rule in db/README.md.
 --
+-- APPLIED to dead-ringers-hub and hellophone-production, 30 Oct 2026: the
+-- BEGIN ... COMMIT body below, all six sections, unchanged since. The
+-- verification block at the end was changed afterwards: its fixed test number
+-- (+15135550123) was already on a staging contact, so create_contact refused
+-- it and the block stopped. It now picks a number nothing holds. That block
+-- never ran as part of the migration, so the change leaves the record of what
+-- ran as it was. The staging verification result reported on 30 Oct came
+-- from the old block with +15555550199 substituted by hand, the committed
+-- block's +15135550123 being already on a staging contact; the new block, run
+-- the same day, picked +15555550100 and gave the same result.
+--
 -- Safe to run twice: the editor's one-step lag has produced a double-run on
 -- 042 and 049, so every step here tells "already applied" from "something
 -- else changed it".
@@ -316,7 +327,7 @@ COMMIT;
 -- Made-up numbers only.
 --
 -- DO $$
--- DECLARE r text := ''; v_org uuid; v_id uuid; v_n int;
+-- DECLARE r text := ''; v_org uuid; v_id uuid; v_n int; v_free text;
 -- BEGIN
 --   SELECT id INTO v_org FROM organizations WHERE code = 'DR';
 --
@@ -360,13 +371,28 @@ COMMIT;
 --                FROM pg_constraint WHERE conname = 'phone_numbers_e164_ck')
 --          || '   (expect true, true)' || chr(10);
 --
---   -- and still refuses what it always refused
+--   -- and still refuses what it always refused. The contact needs a made-up
+--   -- number nothing holds, so create_contact can't refuse it for belonging
+--   -- to someone: not a contact's, not in the directory, not one of the
+--   -- firm's own lines.
+--   SELECT s.n INTO v_free
+--     FROM (SELECT '+1555555' || lpad(g::text, 4, '0') AS n
+--             FROM generate_series(100, 9999) g) s
+--    WHERE NOT EXISTS (SELECT 1 FROM contact_phones cp WHERE cp.e164 = s.n)
+--      AND NOT EXISTS (SELECT 1 FROM directory_entries d WHERE d.e164 = s.n)
+--      AND NOT EXISTS (SELECT 1 FROM phone_numbers p WHERE p.e164 = s.n)
+--    ORDER BY s.n LIMIT 1;
+--   IF v_free IS NULL THEN
+--     RAISE EXCEPTION 'VERIFY: no free +1555555xxxx number to test with';
+--   END IF;
+--
 --   BEGIN
---     v_id := create_contact(v_org, 'Verify Still Checked', NULL, 'family', '+15135550123');
+--     v_id := create_contact(v_org, 'Verify Still Checked', NULL, 'family', v_free);
 --     UPDATE contact_phones SET e164 = '55512' WHERE contact_id = v_id;
 --     r := r || 'bad number through the back door: ALLOWED (BAD)' || chr(10);
 --   EXCEPTION WHEN check_violation THEN
---     r := r || 'bad number through the back door refused' || chr(10); END;
+--     r := r || 'bad number through the back door refused (test number '
+--            || v_free || ')' || chr(10); END;
 --
 --   -- Hunts for other statements of the pattern. Checks function bodies, check
 --   -- and domain constraints, RLS policies, column defaults and generated
