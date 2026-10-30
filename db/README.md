@@ -169,3 +169,94 @@ questions rather than one question twice.** It has happened twice:
 
 The fix both times was to name the two questions and give each its own column
 or function, not to loosen the one check until it stopped complaining.
+
+## Numbering
+
+New migrations get a timestamp, not a sequence number.
+
+```
+20261030T1430_add_case_notes.sql
+```
+
+Two sessions drafting at the same moment can't collide, the files still sort
+into the order they were written, and nobody has to check what number is free.
+
+`001`–`058` keep their numbers. Dozens of comments cross-reference them —
+"043's view", "050's set_call_case" — and renaming would break every one of
+those for no benefit.
+
+This failed twice before the rule existed. A `035` was written in two sessions
+with different contents, and so was an `058` — the second time, one of them
+ran on production while the other was being reviewed. Both collisions came
+from two writers reading a counter that only reflects what has already been
+committed, which is never what either of them is holding.
+
+A sequence number also implies a running order it can't keep: a `056` written
+before `058` but applied after it says something untrue about when it ran. A
+timestamp says only when it was written, which is all a filename can honestly
+claim.
+
+## Authorship, and review before the run
+
+The migration is written by whoever will apply it.
+
+- A schema change arising from app work is written in the app session, and
+  reviewed in the Hub session before it runs.
+- A schema change arising from design work is designed in the Hub session and
+  handed over to be written, named and run.
+
+Reviewed before it runs — not reported after. On 30 October an `058` was
+written and run on production by the session that wrote it, dropping a column
+from the live database, while a different `058` was under review elsewhere.
+The work was done carefully and the carry-over was handled; nobody saw it
+first. That missing step is the entire reason the split exists, so a migration
+that is described after the fact has not been reviewed.
+
+Review here is low ceremony and has one requirement: the other session sees
+the file, and says go or doesn't, before it is applied. What that catches is
+not usually the logic — it is the grant nobody thought about, the second run
+that reads as drift, the rule written twice, the function still writing a
+column about to be dropped.
+
+Why the split at all: the session that can commit and run is the one that can
+see what is actually there, and the session that can't is the one with no
+stake in getting it applied. Each is a poor reviewer of its own work for
+opposite reasons.
+
+## A comment states what the code proves, not what you concluded
+
+Write what the code establishes. If you want to record what you concluded from
+it, say that it is a conclusion.
+
+An overstated comment is worse than none, because it is believed exactly when
+someone is deciding whether they still need to check. All three of these were
+in one file, on the same day, and each was written in good faith by someone
+who had just done the reasoning:
+
+- `-- the check refuses it with a message about the number` — a check
+  violation says `new row for relation … violates check constraint
+  directory_entries_e164_ck`. The comment described behaviour the code does
+  not produce, and it nearly shipped alongside a form that would have shown a
+  manager that string.
+- `-- The pattern is written once, in the whole schema … (expect 0, 0)` — the
+  scan read function bodies and check constraints. RLS policies, column
+  defaults, views, materialized views and trigger WHEN clauses went unread. A
+  0 would have been taken as proof of something it could not see.
+- `ELSIF v LIKE '%7,14%' THEN NULL; -- 055's version, as expected` — four
+  characters that a drifted 055 also matches. The comment asserted an
+  identification; the code tested for a substring.
+
+Two shapes, two questions:
+
+**It describes behaviour.** Ask what a person would actually see, or what
+would actually be written. Not what the code is for — what it emits.
+
+**It asserts a result.** Ask what the query returns if the claim is false. If
+it returns the same thing, the comment is a hope and the code is a net. Say
+so: *a net, not a proof* is an honest comment; `expect 0` is not, unless 0 is
+only reachable one way.
+
+The first of these is the one that gets caught. The second and third were only
+found because the first had already moved suspicion from the SQL to the prose
+— so treat one overstated comment in a file as a reason to re-read the others,
+not as an isolated typo.
