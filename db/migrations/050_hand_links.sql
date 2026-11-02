@@ -48,6 +48,33 @@
 -- contact or case to the call's own firm.
 --
 -- Requires: 001 to 049
+--
+-- SUPERSEDED IN PART BY 20261102T2200_merge_chains.sql, 2 Nov 2026. Two things
+-- below were true when this ran and are not true now.
+--
+-- 1. THE COMMENT ABOVE set_call_contact's MERGE RESOLUTION IS OUT OF DATE.
+--    It says "merge_contacts() doesn't flatten chains (A into B, then B into C
+--    leaves A pointing at B)". merge_contacts now repoints A to C, and a
+--    trigger on contacts, decedents and people refuses a chain from either
+--    end, so one cannot be created at all. The comment is in the function
+--    body, so it is what the database holds until something replaces that
+--    body; this note is the record that it is wrong, not a fix.
+--
+--    THE REFUSAL ITSELF STAYS, and is not wrong. It is now unreachable,
+--    which is different: it is what would still be there if that trigger were
+--    ever dropped. Do not remove it on the grounds that the guard exists.
+--
+-- 2. THE VERIFICATION BLOCK STOPS AT ITS TWO-HOP SET-UP. It does
+--
+--      UPDATE contacts SET merged_into = v_case WHERE id = v_c;
+--
+--    to build v_c2 -> v_c -> v_case and prove the refusal in (1). That UPDATE
+--    is now refused by the trigger, so the block raises there and the lines
+--    after it do not run. The test is not wrong — what it tested moved from
+--    "handled when it happens" to "cannot happen" — but it cannot be set up
+--    any more, and rewriting it would mean rewriting what it proves. Run the
+--    block only up to that point, or read 20261102T2200's own verification,
+--    which asserts the same thing from the guard's side.
 -- =============================================================================
 
 BEGIN;
