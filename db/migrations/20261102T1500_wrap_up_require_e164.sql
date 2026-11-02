@@ -48,6 +48,14 @@
 --
 -- Safe to run twice: the drift check tells "already applied" from "something
 -- else changed it", and a second run reinstalls the same body.
+--
+-- APPLIED to staging and production, 2 Nov 2026, from the file hashed
+-- ad1a56ca. The BEGIN … COMMIT body is unchanged since — what is below is
+-- what ran. Two comments OUTSIDE it were corrected afterwards, per
+-- db/README.md: the count in the STILL TO DO and in the verification's
+-- expectation said fourteen, and the four groups beside it are 1 + 6 + 7 + 1.
+-- Staging prints fifteen names. The groups and the names were right; the
+-- total was arithmetic.
 -- =============================================================================
 
 BEGIN;
@@ -333,7 +341,7 @@ COMMIT;
 --        AND p.prosrc NOT LIKE '%require_e164%' AND p.proname <> 'normalize_e164'
 --      ORDER BY 1;
 --
---   still returns fourteen functions on both databases. They are not all the
+--   still returns fifteen functions on both databases. They are not all the
 --   same kind of thing, and they are not all fine:
 --
 --   (a) require_e164 itself, if the scan is written as above: its body calls
@@ -459,7 +467,7 @@ COMMIT;
 --                          AND p.proname <> 'normalize_e164'
 --                          AND p.prosrc NOT LIKE '%require_e164%'), 'none')
 --          || chr(10)
---          || '   (expect 14, WITHOUT save_wrap_up: require_e164 itself;'
+--          || '   (expect 15, WITHOUT save_wrap_up: require_e164 itself;'
 --          || ' the six resolvers contact_for_number, firm_only_number,'
 --          || ' resolve_number, organization_for_call, organization_for_number,'
 --          || ' party_name; the seven *_normalize triggers; and'
