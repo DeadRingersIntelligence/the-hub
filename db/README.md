@@ -224,36 +224,74 @@ before `058` but applied after it says something untrue about when it ran. A
 timestamp says only when it was written, which is all a filename can honestly
 claim.
 
-051 (merge chains): drafted before 052 ran on 22 October, never run on either
-database, no file in the-hub. When it's needed it is written fresh against the
-schema as it then is, not recovered from the draft, which predates 052–058 and
-20261030T1500. 052–055 each state in their headers that they don't need it;
-nothing has been checked for 057 or 058.
+**051 (merge chains): done, as `20261102T2200_merge_chains.sql`.** Written
+fresh against the schema as it then was, not recovered from the October draft
+— which predated 052–058 and `20261030T1500` — and timestamped rather than
+numbered, so `051` now names a decision rather than a file.
 
-What was read from both databases on 30 October:
+`merged_into` is one hop deep, and is kept that way rather than checked for.
 
-- `merge_contacts` sets `merged_into` on the contact it merges away, but
-  doesn't repoint contacts already merged into that one, and doesn't refuse a
-  survivor that is itself merged. Merging A into B, then B into C, leaves A
-  pointing at B.
-- Decedents have no merge function (the only merge functions are
-  `merge_contacts` and `merge_candidates`). Whatever sets
-  `decedents.merged_into`, nothing guards it: no check, no trigger.
-- Readers resolve one hop with `COALESCE(merged_into, id)`, among them
-  `create_case_for_call` (057, decedents) and `save_wrap_up` (053, contacts).
-  That is right only while no chain exists. Other readers weren't looked for.
+**What guards it.** `merged_into_points_at_a_survivor()`, one trigger function
+on `contacts`, `decedents` and `people`, keyed on `TG_TABLE_NAME` and scoped to
+`BEFORE INSERT OR UPDATE OF merged_into`. It refuses, in both directions:
 
-Deferring 051 is safe only while there are no chains. On 30 October there were
-none on either database, for contacts or decedents. Nothing prevents one
-forming — the next `merge_contacts` call can make one — and nothing detects
-it. So check, rather than assume:
+- a row merged into itself;
+- a target at another firm;
+- a target that has itself been merged away;
+- **a row being merged away that others are already merged into.**
 
-```sql
-SELECT count(*) FROM contacts a JOIN contacts b ON b.id = a.merged_into
- WHERE b.merged_into IS NOT NULL;
-SELECT count(*) FROM decedents a JOIN decedents b ON b.id = a.merged_into
- WHERE b.merged_into IS NOT NULL;
-```
+The last one is the half that is easy to miss. Refusing a merged *target*
+stops `A → B` when `B` is already merged; it does nothing about `B → C` when
+`A` is already merged into `B`, which strands `A` just as thoroughly. For
+decedents and people that is the *only* way a chain can form, because neither
+has a merge function and every merge there is a hand `UPDATE`.
+
+The trigger takes `FOR UPDATE` on the target, so two concurrent merges —
+`A → B` and `B → C` — cannot each pass while the other is uncommitted.
+
+**What repoints.** `merge_contacts` moves anything merged into the loser onto
+the survivor before pointing the loser away, so merging into a contact that
+has absorbed others stays an ordinary thing to do instead of being refused. It
+also refuses either end that has already been merged. Its body went from
+`5a0bf402ed0db21c8ff412f679fa7708` to `16177d5f2ae691818929c375e222e081`.
+
+**Who reads it.** Every reader resolves exactly one hop with
+`COALESCE(merged_into, id)`. The functions whose bodies mention the column,
+read from the database rather than from the migrations, are:
+`contact_for_number`, `create_case_for_call`, `delete_case`,
+`ingest_call_event`, `merge_candidates`, `merge_contacts`, `save_wrap_up`,
+`set_call_contact`. The previous version of this entry ended "Other readers
+weren't looked for"; that is the list.
+
+**`set_call_contact` still refuses a survivor that is itself merged** (050).
+The trigger makes that branch unreachable, which is not the same as making it
+wrong: it is what would still be there if the trigger were ever dropped.
+
+**050 is superseded in two places, and carries a note saying so**, added in
+the same change. Its verification block builds `v_c2 → v_c → v_case` on purpose
+to prove that refusal, and building it is now refused, so the block stops
+there. And the comment above `set_call_contact`'s merge resolution says
+"`merge_contacts()` doesn't flatten chains", which was true when 050 ran and is
+not true now — it is in the function body, so the note records it rather than
+fixing it.
+
+**Nothing to check any more.** The two `SELECT count(*)` queries this entry
+used to carry were there because nothing prevented a chain and nothing detected
+one. Both are now prevented, so neither query is a routine to run. The same
+counts survive in `20261102T2200` in two different roles: its section 1 is a
+**precondition** that refuses to install the guard if any row already breaks
+the rule, and its verification block counts again **afterwards** as an
+assertion. Neither is a thing to come back and run later.
+
+**Still open, and not guarded by any of this:**
+
+- There is no merge function for `decedents` or `people`. The guard says what a
+  merge must leave behind; it does not move anything. Merging a decedent by
+  hand means repointing `case_decedents`, `interaction_decedents` and
+  `contact_decedent_links` yourself, with nothing checking that it was done.
+- A hand-set `merged_into` writes no history. `merge_contacts` records through
+  `record_change`; a direct `UPDATE` records nothing, so a contact can stop
+  being a contact with no record of who decided that.
 
 ## Authorship, and review before the run
 
@@ -330,3 +368,32 @@ The first of these is the one that gets caught. The second and third were only
 found because the first had already moved suspicion from the SQL to the prose
 — so treat one overstated comment in a file as a reason to re-read the others,
 not as an isolated typo.
+
+**And a fourth, which writing carefully cannot prevent.** The three above were
+wrong when they were written. This one was right when it was written, and the
+code underneath it changed:
+
+```sql
+-- merge_contacts() doesn't flatten chains (A into B, then B into C leaves A
+-- pointing at B), so a survivor that is itself merged away is refused rather
+-- than half-resolved.
+```
+
+True in 050, in October. `20261102T2200` made `merge_contacts` repoint and made
+a chain impossible, and that comment became a statement about the opposite of
+what the database does — sitting in a file nobody had any reason to open,
+inside a function body, where a reviewer reading only the changed file will
+never see it.
+
+No amount of care at writing time catches this one, and no reviewer of the
+change catches it either. The only thing that does is looking:
+
+**When you change behaviour, search for comments describing the old behaviour
+before you finish.**
+
+Grep for the thing you changed, not the file you changed it in —
+`merged_into`, not `merge_contacts` — because the comments that go stale are in
+the callers and the neighbours. A comment in a function body cannot be edited
+without replacing that body, so when the search finds one, the answer is often
+a note in the file's header recording that it is wrong rather than a fix. That
+is still worth doing: the next person finds the note beside the lie.
