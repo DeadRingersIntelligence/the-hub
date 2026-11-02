@@ -62,6 +62,24 @@
 -- Safe to run twice: both enum adds are IF NOT EXISTS, the column adds are
 -- IF NOT EXISTS, the seed is guarded by NOT EXISTS, and the backfill only
 -- touches rows that have no status item yet.
+--
+-- APPLIED to staging 2 Nov 2026, both blocks, from the file hashed
+-- afc364dd. The MIGRATION is unchanged since — what is below is what ran.
+-- The commented VERIFICATION BLOCK was fixed afterwards, having never run as
+-- part of the migration (db/README.md). Three bugs, all in the block:
+--
+--   * four '…' || NOT EXISTS (…) || '…' concatenations, which parse as
+--     NOT (EXISTS (…) || '…') and raise "argument of NOT must be type
+--     boolean". NOT binds looser than ||, so each needs its own parentheses.
+--     The same shape was fixed in 20261030T1500 on 30 Oct; it is a property
+--     of writing assertions as concatenated strings, not of this file.
+--   * the manager pass set an in-use status's outcome to 'active' when the
+--     case was already on an active status, so the guard had nothing to
+--     refuse and the test reported its own no-op as a failure to refuse.
+--   * the history checks took the newest served_on row by occurred_at. Every
+--     row written inside one transaction shares an occurred_at, because now()
+--     is the transaction's start time, so "newest" was arbitrary and returned
+--     a "recorded as served" row instead of the removal.
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
@@ -639,17 +657,17 @@ COMMIT;
 --   r := r || 'statuses at this firm: ' || v_n || '   (expect 3)' || chr(10);
 --
 --   r := r || 'every firm has three: '
---          || NOT EXISTS (SELECT 1 FROM organizations o
---                          WHERE (SELECT count(*) FROM picklist_items p
---                                  WHERE p.organization_id = o.id
---                                    AND p.picklist = 'case_status') <> 3)
+--          || (NOT EXISTS (SELECT 1 FROM organizations o
+--                           WHERE (SELECT count(*) FROM picklist_items p
+--                                   WHERE p.organization_id = o.id
+--                                     AND p.picklist = 'case_status') <> 3))
 --          || '   (expect true)' || chr(10);
 --
 --   r := r || 'existing cases backfilled: '
---          || NOT EXISTS (SELECT 1 FROM cases WHERE status_item_id IS NULL)
+--          || (NOT EXISTS (SELECT 1 FROM cases WHERE status_item_id IS NULL))
 --          || ', outcome matches the item: '
---          || NOT EXISTS (SELECT 1 FROM cases c JOIN picklist_items i ON i.id = c.status_item_id
---                          WHERE i.case_outcome IS DISTINCT FROM c.status)
+--          || (NOT EXISTS (SELECT 1 FROM cases c JOIN picklist_items i ON i.id = c.status_item_id
+--                           WHERE i.case_outcome IS DISTINCT FROM c.status))
 --          || '   (expect true, true)' || chr(10);
 --
 --   -- A firm may rename its own status. 018's protection must not fire.
@@ -717,7 +735,7 @@ COMMIT;
 --     r := r || 'case kept its hidden status: '
 --            || (SELECT status_item_id = v_lost FROM cases WHERE id = v_case)
 --            || ', and it is no longer offered: '
---            || NOT EXISTS (SELECT 1 FROM picklist_for(v_org, 'case_status') WHERE id = v_lost)
+--            || (NOT EXISTS (SELECT 1 FROM picklist_for(v_org, 'case_status') WHERE id = v_lost))
 --            || '   (expect true, true)' || chr(10);
 --
 --     -- Another firm's status is refused.
@@ -904,8 +922,11 @@ COMMIT;
 --       EXCEPTION WHEN others THEN
 --         r := r || 'manager set_case_status REFUSED: ' || SQLERRM || chr(10); END;
 --
+--       -- To a DIFFERENT outcome: the case is on Won, which is already
+--       -- active, so setting it to active changes nothing, the guard has
+--       -- nothing to refuse, and the test passes itself.
 --       BEGIN
---         UPDATE picklist_items SET case_outcome = 'active'
+--         UPDATE picklist_items SET case_outcome = 'on_hold'
 --          WHERE id = (SELECT status_item_id FROM cases WHERE id = v_case);
 --         r := r || 'manager changed an outcome in use: ALLOWED (BAD)' || chr(10);
 --       EXCEPTION WHEN others THEN
@@ -959,16 +980,23 @@ COMMIT;
 --         r := r || 'manager removal NOT RUN: ' || SQLERRM || chr(10); END;
 --
 --       -- The reason is on the record, in the detail and in words.
+--       --
+--       -- Found by its reason, not by being the newest row. Every row written
+--       -- in this block shares one occurred_at, because now() is the start of
+--       -- the transaction — so ORDER BY occurred_at DESC returns whichever
+--       -- served_on row the planner reaches first, which was a "recorded as
+--       -- served" one. A removal is the only served_on change that carries a
+--       -- reason, so that is what identifies it.
 --       BEGIN
 --         r := r || 'history carries the reason: '
 --                || COALESCE((SELECT detail->>'reason' FROM change_history
 --                              WHERE entity_id = v_case AND detail->>'field' = 'served_on'
---                              ORDER BY occurred_at DESC LIMIT 1), 'NONE')
+--                                AND detail->>'reason' IS NOT NULL LIMIT 1), 'NONE')
 --                || chr(10);
 --         r := r || 'and says so in words: '
 --                || COALESCE((SELECT summary FROM change_history
 --                              WHERE entity_id = v_case AND detail->>'field' = 'served_on'
---                              ORDER BY occurred_at DESC LIMIT 1), 'NONE')
+--                                AND detail->>'reason' IS NOT NULL LIMIT 1), 'NONE')
 --                || chr(10);
 --       EXCEPTION WHEN others THEN
 --         r := r || 'history checks NOT RUN: ' || SQLERRM || chr(10); END;
