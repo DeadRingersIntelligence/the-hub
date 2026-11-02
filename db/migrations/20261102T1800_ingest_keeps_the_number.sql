@@ -86,6 +86,16 @@
 --
 -- Safe to run twice: the drift check tells "already applied" from "something
 -- else changed it", and a second run reinstalls the same body.
+--
+-- APPLIED to staging and production, 2 Nov 2026, from the file hashed
+-- f5b5eb82. The BEGIN … COMMIT body is unchanged since, so ingest_call_event
+-- still installs as 9b0ed30c — what is below is what ran. Two comments
+-- OUTSIDE it were corrected afterwards, per db/README.md: the count of calls
+-- already holding a null number was unscoped, so it included 50 outbound
+-- mystery-shop rows that never went through this function and never had a
+-- number to lose. Scoped to the ingest path it is 0 on production and 1 on
+-- staging. The paragraph it supported — calling for a backfill — was wrong in
+-- the same way, and now says production has nothing to recover.
 -- =============================================================================
 
 BEGIN;
@@ -407,15 +417,31 @@ COMMIT;
 -- STILL TO DO, named so they aren't folded in and skipped
 --
 -- * CALLS ALREADY STORED WITH A NULL NUMBER ARE NOT RECOVERED. This changes
---   what happens from now on. Whether any exist is worth knowing:
+--   what happens from now on. The count has to be SCOPED TO THE INGEST PATH
+--   or it answers a different question:
 --
 --     SELECT count(*) FROM interactions
---      WHERE channel = 'call' AND (from_e164 IS NULL OR to_e164 IS NULL);
+--      WHERE channel = 'call' AND source = 'real'
+--        AND external_call_ref IS NOT NULL
+--        AND (from_e164 IS NULL OR to_e164 IS NULL);
 --
---   interaction_events.payload holds the envelope DialStack sent, so for those rows
---   the number may still be recoverable from it. That is a backfill, with its
---   own decision about what to do when the payload disagrees with the row,
---   and it is not this migration.
+--   Unscoped it returns 50 on production and 51 on staging, and almost all of
+--   that is a different population: outbound source = 'shop' rows with no
+--   external_call_ref, which never came through ingest_call_event and never
+--   had a number to lose. Scoped, it is 0 on production and 1 on staging —
+--   a single real inbound event, probably a test.
+--
+--   SO THERE IS NOTHING TO RECOVER ON PRODUCTION, and the backfill this
+--   paragraph used to call for is one staging row. If it is ever needed,
+--   interaction_events.payload holds the envelope DialStack sent, and the
+--   decision it turns on is what to do when the payload disagrees with the
+--   row.
+--
+-- * Whether mystery-shop calls should store numbers at all is a separate
+--   question and may not be a defect: those 50 rows are created by the shop
+--   workflow rather than by ingestion, and nothing here establishes what they
+--   ought to hold. Noted so the count above is not read as fifty broken
+--   calls by whoever runs it next.
 --
 -- * FOUR TABLES STILL HAVE NO is_e164 CHECK, so a kept-but-unreadable value
 --   is stored and then matches nothing: leads.phone_e164,
@@ -499,11 +525,22 @@ COMMIT;
 --       r := r || 'readable-from test NOT RUN: ' || SQLERRM || chr(10); END;
 --   END IF;
 --
---   -- How many calls already carry the damage this stops.
---   r := r || 'stored calls with a null number: '
+--   -- How many calls already carry the damage this stops — scoped to the
+--   -- ingest path, because unscoped this counts outbound shop rows that never
+--   -- went through ingest_call_event and never had a number to lose. Both
+--   -- numbers are printed so the difference is visible rather than implied.
+--   r := r || 'ingested calls with a null number: '
+--          || (SELECT count(*) FROM interactions
+--               WHERE channel = 'call' AND source = 'real'
+--                 AND external_call_ref IS NOT NULL
+--                 AND (from_e164 IS NULL OR to_e164 IS NULL))
+--          || '   (expect 0 on production, 1 on staging — not fixed here)'
+--          || chr(10)
+--          || '  all calls with a null number, any source: '
 --          || (SELECT count(*) FROM interactions
 --               WHERE channel = 'call' AND (from_e164 IS NULL OR to_e164 IS NULL))
---          || '   (not fixed here — see STILL TO DO)' || chr(10);
+--          || '   (the rest are shop rows — a separate question, not this '
+--          || 'defect)' || chr(10);
 --
 --   RAISE EXCEPTION 'VERIFY 20261102T1800_ingest_keeps_the_number (all rolled back) %',
 --                   chr(10) || r;
