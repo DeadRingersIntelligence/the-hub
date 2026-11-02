@@ -36,6 +36,14 @@
 --
 -- Safe to run twice: the drift check tells "already applied" from "something
 -- else changed it", and a second run reinstalls the same body.
+--
+-- APPLIED to staging and production, 2 Nov 2026, from the file hashed
+-- 4106360c. The BEGIN … COMMIT body is unchanged since, so
+-- case_converted_notify still installs as 1fe7e035 — what is below is what
+-- ran. Section 2's header comment was added afterwards, outside the body, per
+-- db/README.md: it records that hellophone docs/troubleshooting.md quotes the
+-- warning's text, and that the search string which actually works is "no
+-- notification for case".
 -- =============================================================================
 
 BEGIN;
@@ -71,6 +79,17 @@ END $$;
 -- notification_preferences is self-only under RLS, so as the converter this
 -- would find no preference but their own and write nothing. The handler
 -- changes what happens when something fails, not who this runs as.
+--
+-- THE WARNING'S TEXT IS QUOTED IN hellophone docs/troubleshooting.md. Anyone
+-- rewording the RAISE WARNING in the body below has to reword that doc in the
+-- same change — otherwise it describes a message that no longer appears, and
+-- whoever searches for it concludes nothing went wrong.
+--
+-- And the search string that works is "no notification for case", not
+-- "case_converted_notify": the latter also matches every migration statement
+-- naming the function, this one included. The body still says to search for
+-- the function name. Correcting that changes the body hash, so it waits for a
+-- migration rather than an annotation — it is queued with the dispatcher.
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION case_converted_notify() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
