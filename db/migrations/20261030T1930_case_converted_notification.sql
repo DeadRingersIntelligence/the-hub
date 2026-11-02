@@ -34,6 +34,19 @@
 --
 -- Safe to run twice: the enum add is IF NOT EXISTS, the table and trigger are
 -- guarded, and the preference seed is ON CONFLICT DO NOTHING.
+--
+-- STAGING, 2 Nov 2026: BLOCK 1 APPLIED, BLOCK 2 FAILED AND ROLLED BACK. So
+-- 'case_converted' is already a notification_event value on staging while
+-- none of the table, functions or triggers exist — which is what the two
+-- blocks being separate transactions means, and why block 1 is written to be
+-- re-runnable rather than skipped.
+--
+-- Section 5's seed raised "column event is of type notification_event but
+-- expression is of type text". DISTINCT forces an unknown literal to resolve
+-- before the insert's coercion to the target column applies, so a SELECT with
+-- DISTINCT needs an explicit cast where a plain VALUES list does not. Every
+-- insert of an enum literal in this file now casts, including the one in the
+-- trigger, which is the one that would take case creation down with it.
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
@@ -278,7 +291,14 @@ BEGIN
 
   INSERT INTO notifications
     (organization_id, user_id, event, subject_entity, subject_id, body)
-  SELECT v_org, r.user_id, 'case_converted', 'case', NEW.case_id, v_body
+  -- Cast, as in sections 5 and 6. Without DISTINCT this INSERT ... SELECT
+  -- would resolve the literals against the target columns on its own — but
+  -- this one runs on every conversion, and a type error here aborts
+  -- create_case_for_call(). It is not a place to rely on an implicit step.
+  SELECT v_org, r.user_id,
+         'case_converted'::notification_event,
+         'case'::history_entity,
+         NEW.case_id, v_body
     FROM case_notification_recipients(v_org) r
    WHERE r.user_id IS DISTINCT FROM v_actor_id          -- not the person who did it
      AND EXISTS (SELECT 1 FROM notification_preferences p
@@ -321,8 +341,16 @@ CREATE TRIGGER case_converted_notify_t AFTER INSERT ON case_decedents
 -- outright for a user with no notify_email or notify_sms_e164 — the seed would
 -- fail rather than degrade.
 -- -----------------------------------------------------------------------------
+-- Cast explicitly. In an INSERT ... SELECT the bare literals are resolved as
+-- text before the target column's type is considered — with DISTINCT forcing
+-- that resolution early — and the insert fails with "column event is of type
+-- notification_event but expression is of type text". A plain VALUES list
+-- happens to survive this; a SELECT does not.
 INSERT INTO notification_preferences (user_id, event, channel, enabled)
-SELECT DISTINCT u.id, 'case_converted', 'desktop', true
+SELECT DISTINCT u.id,
+       'case_converted'::notification_event,
+       'desktop'::notification_channel,
+       true
   FROM user_scopes s
   JOIN users u ON u.id = s.user_id
  WHERE s.revoked_on IS NULL
@@ -352,8 +380,15 @@ BEGIN
     RETURN NULL;
   END IF;
 
+  -- Cast for the same reason as section 5, though a VALUES list would resolve
+  -- these against the target columns on its own. Written the same way so the
+  -- two inserts do not differ in a way that invites someone to "simplify" the
+  -- one that needs it.
   INSERT INTO notification_preferences (user_id, event, channel, enabled)
-  VALUES (NEW.user_id, 'case_converted', 'desktop', true)
+  VALUES (NEW.user_id,
+          'case_converted'::notification_event,
+          'desktop'::notification_channel,
+          true)
   ON CONFLICT (user_id, event, channel) DO NOTHING;
 
   RETURN NULL;
