@@ -262,11 +262,28 @@ COMMIT;
 --   reversible with one GRANT, and it changes nothing about how the product
 --   behaves today.
 --
---   One thing to settle first, and it is the realistic way this bites: whether
---   anything in hellophone, or any staging-reset tooling, truncates using the
---   service key. If something does, the answer is not to keep the privilege
---   but to have that tooling use the owner connection, which is what it should
---   have been doing.
+--   One thing to settle first, and it is the realistic way this bites:
+--   whether anything in hellophone, or any staging-reset tooling, truncates
+--   using the service key. Searched on 3 November: no function body in public
+--   mentions TRUNCATE on either database, and the-hub has no reset or reload
+--   script. hellophone itself is the half still to search — TRUNCATE and
+--   DELETE FROM, package.json scripts, anything under supabase/, seed and
+--   fixture files, and CI workflows.
+--
+--   IF ONE TURNS UP, THE FIX IS A GUARD INSIDE IT that refuses any target but
+--   the staging project. An earlier version of this bullet said to move such a
+--   script to the owner connection instead, which is backwards: postgres owns
+--   the schema and holds more than service_role does, so that would hand a
+--   destructive script MORE privilege, not less. Recorded rather than quietly
+--   replaced, because it reads like reasonable advice.
+--
+-- * THE SEQUENCE DEFAULT STILL DIFFERS, and not for this role. authenticated
+--   holds rwU on staging and rU on production, which means a signed-in user on
+--   staging can call setval. No file has touched it: 1600 was anon, 1700 was
+--   tables, this one is service_role. It is small — UPDATE on a sequence with
+--   no INSERT on the table is a way to corrupt an id series rather than to
+--   read anything — and it is the last unaligned default left. One line in a
+--   file of its own, or folded into whatever next touches the defaults.
 --
 -- * TABLES CREATED BY supabase_admin still grant service_role everything,
 --   through that role's default privileges, which postgres cannot change. Same
@@ -307,9 +324,13 @@ COMMIT;
 --                                AND d.objid = p.oid AND d.deptype = 'e')
 --             AND has_function_privilege('service_role', p.oid, 'EXECUTE')),
 --          '    NONE') || chr(10);
---   r := r || '   (expect EXACTLY those three today. More means PUBLIC is '
---          || 'reaching service_role, which the PUBLIC sweep will end; an '
---          || 'unexpected NAME means an overload was spared)' || chr(10);
+--   r := r || '   (expect 71 on PRODUCTION and 69 on STAGING: the three direct '
+--          || 'grants plus the 68 — 66 on staging, which is short 014''s two — '
+--          || 'that PUBLIC reaches. NOT three: PUBLIC includes service_role '
+--          || 'like every other role, and this file does not touch PUBLIC. '
+--          || 'After the PUBLIC sweep expect FOUR, the three plus is_e164, '
+--          || 'which keeps PUBLIC deliberately. An unexpected NAME at any '
+--          || 'point means an overload was spared by the proname match)' || chr(10);
 --
 --   r := r || 'relations where service_role holds SELECT/INSERT/UPDATE/DELETE: '
 --          || (SELECT count(DISTINCT c.oid) FROM pg_class c
@@ -357,8 +378,11 @@ COMMIT;
 --            FROM pg_default_acl d JOIN pg_namespace ns ON ns.oid = d.defaclnamespace
 --           WHERE ns.nspname = 'public'
 --             AND d.defaclrole = 'postgres'::regrole), '    NONE') || chr(10);
---   r := r || '   (the two databases should now print the SAME three lines. '
---          || 'That is the whole point of this file)' || chr(10);
+--   r := r || '   (TABLES and FUNCTIONS should now print identically on the '
+--          || 'two databases. SEQUENCES will not: authenticated still holds '
+--          || 'rwU on staging against rU on production, which no file has '
+--          || 'touched — see STILL TO DO. Reading "all three match" into this '
+--          || 'line is the mistake it is worded to prevent)' || chr(10);
 --
 --   r := r || 'the three are SECURITY DEFINER: '
 --          || (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
