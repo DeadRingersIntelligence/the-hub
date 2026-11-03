@@ -151,6 +151,64 @@ key ships in the browser. Granting to `authenticated` **adds** a grant; it does
 not remove that one. Nine functions were reachable by anon before migration 037
 because every one of them had a grant and none had a revoke.
 
+## Error codes the app matches on
+
+A refusal the app has to react to carries its own `SQLSTATE`. **The code is the
+contract; the wording is not.** The app matches `PostgrestError.code`, so a
+message can be reworded without a migration — and a code cannot be changed
+without one, with a drift check like any other change to a function body.
+
+### NS — notify SMS
+
+Raised by `request_notify_sms_confirmation()` and `confirm_notify_sms()`
+(`20261102T2330`, `20261102T2345`).
+
+| Code | Means | Raised by |
+|---|---|---|
+| `NS001` | That person has no mobile number to confirm | `request_notify_sms_confirmation` |
+| `NS002` | The number is already confirmed — resending would unconfirm it | `request_notify_sms_confirmation` |
+| `NS003` | Three codes already sent to that number this hour | `request_notify_sms_confirmation` |
+| `NS004` | Ten codes already requested by this user today | `request_notify_sms_confirmation` |
+| `NS005` | Not signed in to the Hub | `confirm_notify_sms` |
+
+`NS002` should not read to the person as an error: it means the thing they
+wanted is already true.
+
+`NS003` says neither the number nor who caused it, and reads the same whoever
+tripped it — counted across users, so a different message for "it wasn't you"
+would tell somebody that a colleague has been asking for codes for that number.
+
+### Choosing a class
+
+Five alphanumerics. Postgres reserves classes beginning `A`–`H` for the SQL
+standard and already uses `HV` for foreign-data-wrapper errors, so a
+self-defined class starts with `5`–`9` or `I`–`Z`. An earlier draft of the NS
+codes used `HS`, which is inside the standard's range.
+
+Two more constraints:
+
+- **Nothing beginning `PT`.** PostgREST reads `PTxyz` as an HTTP status to
+  return.
+- **Nothing ending `000`.** That is the class code itself, and it matches as a
+  whole class rather than as one error.
+
+An unrecognised code comes back from PostgREST as a `400` with the code in the
+body, which is what the app reads.
+
+### The older shape, still live
+
+`settings.ts`'s `friendly()` turns database messages into sentences by matching
+them with regular expressions — `/no mobile number to notify/i` and
+`/no email address to notify/i` among them, both raised by
+`notification_preferences_reachable()` (019). Rewording either message in the
+database breaks the app, silently and in the place a person is already being
+refused something.
+
+Those are the shape this section exists to stop repeating. They are not fixed:
+coding them means replacing 019's function body, so it waits for a migration
+that has another reason to do that. Until then, treat those two messages as
+load-bearing text.
+
 ## Views over a table
 
 `SELECT *` is expanded when a view is created, so a column added to the table
