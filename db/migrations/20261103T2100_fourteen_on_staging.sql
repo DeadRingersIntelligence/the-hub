@@ -5,7 +5,16 @@
 -- APPLIED ON STAGING ONLY, 2026-11-03, block md5
 -- 9cf13d0114d86ba0bfedd649faa3f643. Production was not run and must not be:
 -- section 1 refuses there by design, because 014's objects already exist.
--- Lines 146-296 were checked byte-for-byte against main's 014 after the merge.
+-- The copy of 014 is section 2 below, and it hashes to
+-- dc35b9e60eef8995a0031b658958d0ba — identical to lines 29-179 of main's file,
+-- checked after the merge.
+--
+-- THIS LINE USED TO CITE LINE NUMBERS and was wrong twice in two edits. It
+-- said 146-296, which the annotation above it pushed to 163-313; the
+-- correction to 163-313 was itself wrong by the four lines the correction
+-- added. A line number is a reference to a file that is about to move, and the
+-- second attempt proved it faster than the first. The hash and the section
+-- heading do not move, so they are what this says now.
 --
 -- PARITY AFTERWARDS. The fn, typ, con and col fingerprints are now identical
 -- on the two databases. acl differs by exactly the two entries this file
