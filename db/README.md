@@ -19,7 +19,7 @@ table already exists. That is intended — a migration is a one-time change.
 
 Paste into the Supabase SQL Editor, one file per query, in order.
 
-### Two things that will happen
+### Three things that will happen
 
 **Supabase's row-level-security warning fires on data-only files.** Its scanner
 reads the word "their" inside a rubric question as a table name and warns about
@@ -28,6 +28,172 @@ without RLS" is correct. If it does contain `CREATE TABLE`, read it first.
 
 **The editor rejects files over roughly 1 MB.** That is why migration 013 is
 split into six parts. Run them in letter order.
+
+**The editor rewrites what you submit**, in two ways that matter. It appends a
+trailer to every submission — a `-- source: dashboard` line, a session id and a
+millisecond timestamp — which is why `submitted_text()` exists and why the
+ledger's `ran_md5` means anything. And when the RLS prompt offers "Run and
+enable RLS", that option changes the text before sending it. **Always choose
+"Run without RLS."** These migrations enable row-level security themselves,
+deliberately and where it belongs; letting the editor add its own version would
+both do the wrong thing and make the run's fingerprint disagree with the file's.
+
+## The migration ledger
+
+`schema_migrations` records which migration ran on this database. It starts on
+3 November 2026 and **is not a history**: no row exists for `001`–`058`, and an
+absent row for anything older than that date is not evidence that it did not
+run. Before the table existed, the only way to answer "has this run here?" was
+to read the catalogue for the objects a file creates — which is how staging went
+a month without `014` and nobody could have noticed.
+
+### Every migration records itself
+
+The last statement inside the transaction block, so the row and the work commit
+or roll back together and a file that fails records nothing:
+
+```sql
+DO $$
+BEGIN
+  PERFORM record_migration(
+    '20261103T1700_new_tables_are_read_only.sql',
+    NULL,                       -- the file's sha256, if the applier passes one
+    'One line on what it did.');
+END $$;
+```
+
+A `DO` block, not a bare `SELECT` — the editor appends ` limit 100` to a
+trailing bare `SELECT`, and that lands in the hashed text.
+
+**Nothing enforces this rule and nothing can.** A migration that forgets the
+call is indistinguishable from one that never ran, which is precisely the state
+the table was built to leave. It only works if it is remembered, which is why
+it is written here.
+
+### Two hashes, answering different questions
+
+`sha256` is the file, passed in by whoever applied it. A file cannot record its
+own hash — the hash covers the file that would contain it — so it is an
+argument, never a self-report. Null means nobody passed one.
+
+`ran_md5` is the text the client actually submitted, with the editor's trailer
+stripped. **It should be identical on staging and production.** Same file, same
+paste, same number. When it differs, the two databases were given different
+text, which is the `003` case: staging holds a `people_org_name_uq` without the
+`WHERE merged_into IS NULL` that the repository has, and nothing surfaced it for
+a month.
+
+Before calling a mismatch drift, rule out four innocent causes:
+
+- **The file was annotated after it ran.** A header note or a corrected comment
+  changes `sha256` and must not change `ran_md5`. This is the common one.
+- **CRLF against LF**, if the file crossed machines between the two applies.
+- **A file with more than one transaction block** — the `ALTER TYPE … ADD VALUE`
+  case — records only the block that called `record_migration`. Such a file
+  should call it in each block and name the block in `note`.
+- **The editor changed its trailer.** `submitted_text()` anchors on the
+  `-- source: dashboard` marker and removes everything after it, so a fourth
+  line or a reordering is still stripped; a renamed marker is not.
+
+`ran_len` is the submitted length **in characters**, not bytes — tens means one
+statement was sent, thousands means a file was pasted. The text itself is never
+stored, only the hash and the length, because it carries the session's identity.
+
+### How a row got there
+
+`recorded_how` is `'self'` or `'backfill'`, and a constraint ties it to
+`ran_md5` so the two cannot come to disagree. The eleven rows for migrations
+applied 30 October – 3 November are backfilled: they carry a `sha256` and the
+catalogue evidence that the file ran, and nothing about when, because nothing
+recorded it at the time. **For eight of the eleven the `sha256` is main's file
+and not what was submitted**, since they were annotated after running:
+`20261030T1500`, `20261102T1500`, `T1600`, `T1800`, `T2200`, `T2330`, `T2345`
+and `20261103T1000`.
+
+## Comparing the two databases
+
+Run these on both and compare the three results as sets. Each returns one cell,
+with `' => '` between name and definition and `' ;; '` between entries, because
+the editor's result grid flattens newlines and tabs.
+
+They found two things on 3 November 2026: staging missing `014` entirely, and
+one index differing. Both were months old and neither was being looked for.
+**Worth running on a schedule rather than on suspicion** — the cost is a few
+minutes, and the cost of not running it was a month of staging proofs that were
+weaker than they read.
+
+```sql
+-- col: every column, its type, nullability and default
+SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT c.table_name || '.' || c.column_name AS k, c.data_type || CASE WHEN c.data_type = 'USER-DEFINED' THEN ':' || c.udt_name WHEN c.data_type = 'ARRAY' THEN ':' || c.udt_name ELSE '' END || '|null=' || c.is_nullable || '|def=' || coalesce(c.column_default, '') AS v FROM information_schema.columns c JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name WHERE c.table_schema = 'public') x;
+
+-- typ: every enum and its labels IN ORDER (order is part of the type)
+SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT t.typname AS k, string_agg(e.enumlabel, ',' ORDER BY e.enumsortorder) AS v FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace JOIN pg_enum e ON e.enumtypid = t.oid WHERE n.nspname = 'public' GROUP BY t.typname) x;
+
+-- fn: body hash, volatility, definer/invoker, search_path, return type
+SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT p.oid::regprocedure::text AS k, left(md5(p.prosrc), 12) || '|' || p.provolatile::text || '|' || CASE WHEN p.prosecdef THEN 'definer' ELSE 'invoker' END || '|' || coalesce(array_to_string(p.proconfig, ';'), '') || '|ret=' || pg_get_function_result(p.oid) AS v FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.prokind IN ('f','p') AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')) x;
+
+-- con: constraints and indexes by name
+SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT 'C ' || cl.relname || '.' || co.conname AS k, left(md5(pg_get_constraintdef(co.oid)), 12) AS v FROM pg_constraint co JOIN pg_class cl ON cl.oid = co.conrelid JOIN pg_namespace n ON n.oid = cl.relnamespace WHERE n.nspname = 'public' UNION ALL SELECT 'I ' || i.tablename || '.' || i.indexname, left(md5(i.indexdef), 12) FROM pg_indexes i WHERE i.schemaname = 'public') x;
+
+-- trg: triggers, including which columns and whether enabled
+SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT c.relname || '.' || t.tgname AS k, t.tgtype::text || '|attr=' || t.tgattr::text || '|fn=' || t.tgfoid::regproc::text || '|en=' || t.tgenabled::text AS v FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND NOT t.tgisinternal) x;
+
+-- mig: policies, RLS and FORCE flags, and any migration table
+SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT 'table ' || table_schema || '.' || table_name AS k, 'exists' AS v FROM information_schema.tables WHERE table_name ILIKE '%migration%' OR table_name ILIKE '%schema_version%' UNION ALL SELECT 'policy ' || tablename || '.' || policyname, cmd || '|' || array_to_string(roles, ',') || '|' || left(md5(coalesce(qual, '') || '#' || coalesce(with_check, '')), 12) FROM pg_policies WHERE schemaname = 'public' UNION ALL SELECT 'relkind ' || c.relname, c.relkind::text || '|rls=' || c.relrowsecurity::text || '|force=' || c.relforcerowsecurity::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m')) x;
+```
+
+**Three things these six do not cover**, and all three have mattered: table and
+function grants (`aclexplode` with `acldefault` for a null ACL — a null `proacl`
+means implicit `PUBLIC EXECUTE`, and `aclexplode(NULL)` returns nothing, so a
+query that forgets the `COALESCE` reports no grants at all), `pg_default_acl`,
+and column comments. Grants were compared by hand on 3 November and that is
+where finding 0 came from.
+
+## Is anything still arriving
+
+The structural diff asks whether the schema has moved. This asks the other
+question, which has no schema symptom at all: **production went five days with
+zero interactions**, and it surfaced only because somebody was reading the logs
+for an unrelated reason. It was benign — a quiet test number — and nothing in
+the database could have told the difference between that and the ingestion
+being broken, because both look like an empty table.
+
+Run it daily, beside the structural diff:
+
+```sql
+SELECT o.name,
+       count(*) FILTER (WHERE i.occurred_at > now() - interval '24 hours') AS last_24h,
+       count(*) FILTER (WHERE i.occurred_at > now() - interval '7 days')   AS last_7d,
+       max(i.occurred_at)                                                  AS most_recent
+  FROM organizations o
+  LEFT JOIN interactions i ON i.organization_id = o.id AND i.source = 'real'
+ WHERE EXISTS (SELECT 1 FROM phone_numbers p
+                WHERE p.organization_id = o.id AND p.active)
+ GROUP BY o.id, o.name
+ ORDER BY most_recent NULLS FIRST;
+```
+
+**`EXISTS`, not a join, and the difference is not style.** Joining
+`phone_numbers` before aggregating produces one row per number per interaction,
+so a firm with two active numbers reports twice its real counts. `most_recent`
+would still be right, which is what makes it nasty: the column you would sanity
+check looks fine while the ones you are reading are doubled. Today the query
+gives the same answer either way, because Dead Ringers holds the single active
+number on production — so this is a bug that would have arrived with the second
+firm, in a check nobody re-reads once it is working.
+
+On production, 3 November: one firm, 3 in the last 24 hours, 23 in the last 7
+days, most recent 17:39 UTC — the day's test calls.
+
+Read it by the **first rows, not the totals**. A firm with an active number and
+a `most_recent` of several days ago is the signal; a busy firm at the bottom
+tells you nothing about the quiet one at the top. `source = 'real'` matters —
+seeded and shop rows would mask exactly the gap being looked for, which is the
+same scoping mistake that made a null-number count read 50 when it was 0.
+
+What it cannot tell you is **why**. A quiet firm, a broken webhook, a carrier
+outage and a failing `ingest_call_event` all produce the same empty row. It is
+a prompt to look, not a diagnosis.
 
 ## Which database is which
 
@@ -66,7 +232,7 @@ writes:
 | | Granted to on creation |
 |---|---|
 | Production | `postgres`, `authenticated` |
-| Staging | `postgres`, `anon`, `authenticated`, `service_role` |
+| Staging | `postgres`, `authenticated`, `service_role` — `anon` removed by `20261103T1600` |
 
 So a migration that creates a function and **forgets its `REVOKE`** leaves that
 function callable by `anon` on staging, and would not have on production. The
@@ -88,6 +254,39 @@ Aligning staging's defaults to production's would make staging a truer test.
 That is a change to `ALTER DEFAULT PRIVILEGES`, it affects every function
 created afterwards, and it does not touch the ones already there — so it wants
 its own migration and its own review, not a line in another one.
+
+**Done for `anon`, in `20261103T1600`**, with one limit that matters: nothing
+**`postgres`** grants by default in `public` reaches `anon` any more, and the
+grants `anon` already held were swept. But `ALTER DEFAULT PRIVILEGES` is per
+granting role, and `public` holds a second set belonging to `supabase_admin`
+which still grants `anon` everything — twelve privileges on each database — and
+`postgres` is not a member of `supabase_admin`, so no migration can change
+them. That is why `btree_gist`'s 188 functions in `public` still grant `anon`
+`EXECUTE` directly on both databases. See **Grants on a new table** for the
+same limit on the table side.
+
+Two things remain beyond that. `service_role` is still looser on staging and is
+a file of its own. And `anon` can still `EXECUTE` 68 of our own functions
+**through `PUBLIC`**, which a revoke from `anon` does not touch — `PUBLIC` is a
+separate grant to every role, and that is the trap to remember: *revoking a
+role's own grant does not take away what it holds through `PUBLIC`*.
+
+Those 68 can be swept in one statement rather than decided one at a time, for
+two reasons both established by measurement on 3 November:
+
+- **`authenticated` already holds a direct `EXECUTE` on all 68 on production.**
+  Each has the ACL `{=X/postgres, postgres=X/postgres, authenticated=X/postgres}`.
+  Revoking `PUBLIC` leaves signed-in callers working. An earlier draft of this
+  section asserted the opposite — that `PUBLIC` was the only grant they had —
+  and would have built the next migration on it.
+- **A trigger function does not need `EXECUTE` at all.** PostgreSQL checks that
+  privilege at `CREATE TRIGGER`, not when the trigger fires. Proved on staging:
+  with `EXECUTE` revoked from `PUBLIC`, `anon` and `authenticated`, an `UPDATE`
+  run as `authenticated` still fired `touch_updated_at()` and still set
+  `updated_at`. That covers 33 of the 68.
+
+`is_e164` is the one deliberate exception and keeps `PUBLIC`, for the reason in
+`20261030T1500` §1.
 
 ## Order
 
@@ -161,6 +360,34 @@ Rules that are refused at write time rather than documented and hoped for:
 - Won revenue can never be imputed from an average
 - A benchmark needs at least three contributing organizations
 - Phone numbers normalize to E.164 on write, everywhere they appear
+
+## Grants on a new table
+
+Since `20261103T1700`, a table created in `public` by `postgres` grants
+`authenticated` **`SELECT` and nothing else**. If the application needs to write
+it through the API, the migration says so in its own `GRANT`, next to the policy
+that decides which rows.
+
+This costs something and it is worth knowing in advance: **a migration that
+creates a writable table and forgets the grant will look correct, pass review,
+and fail at runtime** with `permission denied` — in the application, not in the
+migration.
+
+The reason it is worth that cost is finding 0. Six reference tables — the
+scoring rubric and the cross-firm benchmark rows — were writable by every
+signed-in user at every firm on production for a month. Nobody granted that.
+The old default granted it, and a policy written `FOR ALL` because its author
+left the `FOR` clause off let it through. Two defaults, neither examined.
+
+**Two things this does not cover.** Existing tables keep every grant they have,
+all 91 of them, including `INSERT`, `UPDATE` and `DELETE` for `authenticated`;
+default privileges apply at `CREATE` time and never retroactively. What stands
+between that and 91 more copies of finding 0 is the policies, so a policy
+written `FOR ALL` is still the thing to catch in review. And a table created
+through the **Supabase UI** is created by `supabase_admin`, follows that role's
+defaults rather than `postgres`'s, and arrives writable by everyone signed in —
+`ALTER DEFAULT PRIVILEGES` is per granting role and `postgres` is not a member
+of `supabase_admin`. The structural diff is what would catch one.
 
 ## SECURITY DEFINER functions
 
