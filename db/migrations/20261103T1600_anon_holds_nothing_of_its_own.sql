@@ -2,6 +2,11 @@
 -- 20261103T1600_anon_holds_nothing_of_its_own.sql
 -- The Hub — the key that ships in the browser bundle stops holding grants.
 --
+-- APPLIED ON STAGING AND PRODUCTION, 2026-11-03, block md5
+-- 0b0426e0805ecbae168256e53fececbd. Two statements in the header and STILL TO
+-- DO were wrong about the 68 PUBLIC-granted functions and are corrected in
+-- place, marked CORRECTION; the body never depended on them and is unchanged.
+--
 -- WHAT anon IS. The Supabase anonymous key is in every hellophone bundle and
 -- in every preview build. Anyone who opens the site has it. Everything it can
 -- reach is public, whatever the page does with it.
@@ -39,11 +44,28 @@
 -- started from, when an anon-only revoke on production was going to be
 -- reported as a fix and would have changed nothing.
 --
--- Those 68 are a separate file and a decision per function, because PUBLIC is
--- the ONLY grant most of them have: on production not one of the 68 carries a
--- direct grant to authenticated, so revoking PUBLIC without granting
--- authenticated in the same statement would take the application down. Nine of
--- them write. They are listed in STILL TO DO.
+-- Those 68 are a separate file. They are listed in STILL TO DO.
+--
+-- CORRECTION, 2026-11-03, after this file was applied. The paragraph above
+-- used to say the 68 needed deciding one at a time, because PUBLIC was the only
+-- grant they had and revoking it would take the application down. Both halves
+-- were wrong, and the body of this file does not depend on either — but the
+-- next migration would have been built on them, so the correction is here
+-- rather than only in the one that supersedes it.
+--
+--   authenticated ALREADY HOLDS A DIRECT EXECUTE ON ALL 68 on production. Every
+--   one reads {=X/postgres, postgres=X/postgres, authenticated=X/postgres}. I
+--   asserted the opposite from a report about anon — which genuinely has no
+--   direct grant on production — and did not check the neighbouring column.
+--
+--   A TRIGGER FUNCTION NEEDS NO EXECUTE GRANT AT ALL. PostgreSQL checks that
+--   privilege at CREATE TRIGGER, not when the trigger fires. Proved on staging:
+--   EXECUTE revoked from PUBLIC, anon and authenticated, and an UPDATE run as
+--   authenticated still fired touch_updated_at() and still set updated_at.
+--   That is 33 of the 68 that can simply lose PUBLIC with nothing granted back.
+--
+-- So the PUBLIC file is one sweep, not nine decisions, keeping is_e164 as the
+-- deliberate exception.
 --
 -- WHY THIS IS SAFE TO RUN, stated as an argument rather than a hope. Grants
 -- are only half of what a client needs; a policy has to admit it as well.
@@ -237,25 +259,29 @@ COMMIT;
 -- STILL TO DO
 --
 -- * THE 68 PUBLIC-GRANTED FUNCTIONS, which is where anon's real reach is and
---   what the next file has to decide one at a time. The shape of the problem:
---   on production not one of the 68 carries a direct grant to authenticated,
---   so PUBLIC is the only thing making them callable by a signed-in user.
---   Every revoke must be paired with a grant in the same statement or the
---   application stops working.
+--   what the next file does. Measured on production, 2026-11-03:
 --
---   KEEP PUBLIC: the trigger functions (touch_updated_at, the *_normalize and
---   *_guard family, users_sms_*), which must be executable by whoever writes
---   the table; and is_e164, deliberately public since 20261030T1500 §1.
+--     33 trigger functions, which need no EXECUTE grant at all. Two of them
+--        are SECURITY DEFINER — case_converted_notify, users_sms_confirmation_
+--        reset — which does not change the privilege question but is worth
+--        knowing: both run as their owner whenever they fire.
+--     35 regular functions, every one of them INVOKER. That includes
+--        merge_contacts and record_change, so RLS applies to all nine that
+--        write, and the EXECUTE grant is not the only thing standing in the
+--        way. Worth knowing before assuming the opposite, which the earlier
+--        version of this file did.
 --
---   DECIDE, these nine write and should not be reachable by an unauthenticated
---   key under any reading: merge_contacts, record_change, set_contact_blocked,
+--   Three were called over the API in the week to 3 November — call_flow (18),
+--   picklist_for (14), normalize_e164 (6) — all by signed-in users, who hold a
+--   direct grant and keep working after PUBLIC goes.
+--
+--   KEEP PUBLIC: is_e164 alone, deliberately, since 20261030T1500 §1.
+--
+--   The nine that write are merge_contacts, record_change, set_contact_blocked,
 --   rename_tag, acknowledge_alert, apply_tag_rule, attach_events_to_interaction,
---   link_related_calls, find_or_start_text_thread. Each needs its callers
---   checked before its grant changes.
---
---   Note that RLS does not save these the way it saves the tables. A SECURITY
---   DEFINER function runs as its owner, so for any of the nine that is definer,
---   the EXECUTE grant is the whole of the access control.
+--   link_related_calls and find_or_start_text_thread. They no longer need
+--   deciding individually, but they are the ones to name in the file: they are
+--   why the sweep is worth running rather than tidy.
 --
 -- * WHETHER ANY UNAUTHENTICATED PAGE READS public BEFORE SIGN-IN. The argument
 --   in the header covers the database — no policy in public admits anon to a
@@ -267,16 +293,19 @@ COMMIT;
 --   only grants anon held in its own name, and on production those were
 --   REFERENCES, TRIGGER and MAINTAIN on tables, which no page can use.
 --
--- * THE TABLE DEFAULT STILL GIVES authenticated INSERT, UPDATE AND DELETE ON
---   EVERY NEW TABLE, on both databases. That is how finding 0 happened: six
---   reference tables became writable by every signed-in user at every firm
---   because nobody granted anything, and the default granted it for them.
---   Aligning anon does not touch it. My recommendation is to take the write
---   privileges out of the table default as well, so that a new table grants
---   SELECT and nothing else until someone says otherwise — but that changes
---   what happens to the next table anybody adds, including through the
---   Supabase UI, and it is a policy decision rather than an alignment. It
---   wants its own file and the user's word.
+-- * DONE, in 20261103T1700. The bullet here used to read: the table default
+--   still gives authenticated INSERT, UPDATE and DELETE on every new table, on
+--   both databases, which is how finding 0 happened — six reference tables
+--   became writable by every signed-in user at every firm because nobody
+--   granted anything and the default granted it for them. It asked for its own
+--   file and the user's word, and got both: the ruling was SELECT only, and
+--   20261103T1700 applied it to both databases the same day.
+--
+--   Kept rather than deleted because the reasoning is the reasoning, and
+--   because the limit survives the fix: ALTER DEFAULT PRIVILEGES is per
+--   granting role, so a table created BY supabase_admin — which is one of the
+--   paths through the Supabase UI — still arrives writable by everyone signed
+--   in. 1700 makes the migration path safe and leaves that one as it was.
 --
 -- * btree_gist IS INSTALLED INTO public, 188 supabase_admin-owned functions
 --   each granting anon EXECUTE directly, on both databases. Nothing here
