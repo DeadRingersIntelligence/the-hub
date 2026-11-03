@@ -57,6 +57,38 @@ How the app (Vercel project `hellophone`) reaches them:
   Production only. No preview can take in a real call, so real calls reach
   only the production database.
 
+### Default privileges differ, and staging is the looser one
+
+New functions created by `postgres` in `public` are granted to a different set
+on each database, by `pg_default_acl` rather than by anything a migration
+writes:
+
+| | Granted to on creation |
+|---|---|
+| Production | `postgres`, `authenticated` |
+| Staging | `postgres`, `anon`, `authenticated`, `service_role` |
+
+So a migration that creates a function and **forgets its `REVOKE`** leaves that
+function callable by `anon` on staging, and would not have on production. The
+test environment is more permissive than the live one, which means it hides
+this particular mistake instead of catching it — and a function reachable by
+`anon` is exactly what migration 037 existed to clean up, nine of them at once.
+
+Two consequences while that remains true:
+
+- **Never conclude from a clean staging run that the grants are right.** Check
+  `has_function_privilege('anon', …)` explicitly, as the verification blocks
+  from `20261030T1930` onward do.
+- Every new function still gets the explicit pair, on both databases:
+  `REVOKE ALL … FROM PUBLIC, anon;` then `GRANT EXECUTE … TO authenticated;`
+  — see **SECURITY DEFINER functions** below. The revoke is not redundant on
+  production; it is what makes the two databases agree.
+
+Aligning staging's defaults to production's would make staging a truer test.
+That is a change to `ALTER DEFAULT PRIVILEGES`, it affects every function
+created afterwards, and it does not touch the ones already there — so it wants
+its own migration and its own review, not a line in another one.
+
 ## Order
 
 | # | File | What it establishes |
