@@ -2,6 +2,22 @@
 -- 20261103T1000_rubric_and_benchmarks_read_only.sql
 -- The Hub — the scoring methodology is not something a client may edit.
 --
+-- APPLIED ON STAGING AND PRODUCTION, 2026-11-03. Transaction block md5
+-- 1953fab62f72d9d1375474db6a4ccc40. Parity confirmed read-only afterwards:
+-- both databases carry <t>_read(r) and <t>_write(*) on all six, authenticated
+-- holds SELECT and nothing else, anon holds nothing, service_role has lost
+-- TRUNCATE and UPDATE, and the policy digest (names, commands, expressions,
+-- comments) is 6e054bf7 on each.
+--
+-- The exposure looks unused. On production nothing in these tables has a
+-- created_at or updated_at after the 2026-10-07 seed day, and three of the
+-- tables have no updated_at to check — so the schema alone could not settle
+-- it. What settled it: with uuid and timestamp columns excluded and rows
+-- compared as a sorted multiset, the content of all four seeded tables is
+-- identical on two independently seeded databases. A tamper would have had to
+-- be made twice, identically. rubric_templates.effective_from differs, and is
+-- each database's own seed day.
+--
 -- WHAT IS WRONG, on production, today. Six tables carry a single policy that
 -- admits every command:
 --
