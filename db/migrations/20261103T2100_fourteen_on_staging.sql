@@ -5,9 +5,9 @@
 -- APPLIED ON STAGING ONLY, 2026-11-03, block md5
 -- 9cf13d0114d86ba0bfedd649faa3f643. Production was not run and must not be:
 -- section 1 refuses there by design, because 014's objects already exist.
--- The copy of 014 is section 2 below, and it hashes to
--- dc35b9e60eef8995a0031b658958d0ba — identical to lines 29-179 of main's file,
--- checked after the merge.
+-- The copy of 014 is section 2 below. It hashes to
+-- dc35b9e60eef8995a0031b658958d0ba, which is main's 014 between its BEGIN and
+-- its COMMIT, checked after the merge.
 --
 -- THIS LINE USED TO CITE LINE NUMBERS and was wrong twice in two edits. It
 -- said 146-296, which the annotation above it pushed to 163-313; the
