@@ -99,6 +99,12 @@ Before calling a mismatch drift, rule out four innocent causes:
 statement was sent, thousands means a file was pasted. The text itself is never
 stored, only the hash and the length, because it carries the session's identity.
 
+**Compare the two ledgers by filename, never by row count.** Some files can
+only ever run on one database — `20261103T2100_fourteen_on_staging.sql` exists
+because staging was missing `014`, and refuses to run on production by design.
+Staging therefore has one row more, permanently. The rows they share should
+still agree exactly; it is the join that means something, not the total.
+
 ### How a row got there
 
 `recorded_how` is `'self'` or `'backfill'`, and a constraint ties it to
