@@ -112,12 +112,14 @@ and `20261103T1000`.
 
 ## Comparing the two databases
 
-Run these on both and compare the three results as sets. Each returns one cell,
-with `' => '` between name and definition and `' ;; '` between entries, because
-the editor's result grid flattens newlines and tabs.
+Eight queries. Run each on both databases and compare the two cells. Each
+returns a single cell, with `' => '` between a name and its definition and
+`' ;; '` between entries, because the editor's result grid flattens newlines
+and tabs — so a diff is a text comparison rather than a row-by-row read.
 
-They found two things on 3 November 2026: staging missing `014` entirely, and
-one index differing. Both were months old and neither was being looked for.
+The first six found two things on 3 November 2026: staging missing `014`
+entirely, and one index differing. Both were months old and neither was being
+looked for.
 **Worth running on a schedule rather than on suspicion** — the cost is a few
 minutes, and the cost of not running it was a month of staging proofs that were
 weaker than they read.
@@ -142,12 +144,40 @@ SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT c.relname ||
 SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT 'table ' || table_schema || '.' || table_name AS k, 'exists' AS v FROM information_schema.tables WHERE table_name ILIKE '%migration%' OR table_name ILIKE '%schema_version%' UNION ALL SELECT 'policy ' || tablename || '.' || policyname, cmd || '|' || array_to_string(roles, ',') || '|' || left(md5(coalesce(qual, '') || '#' || coalesce(with_check, '')), 12) FROM pg_policies WHERE schemaname = 'public' UNION ALL SELECT 'relkind ' || c.relname, c.relkind::text || '|rls=' || c.relrowsecurity::text || '|force=' || c.relforcerowsecurity::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m')) x;
 ```
 
-**Three things these six do not cover**, and all three have mattered: table and
-function grants (`aclexplode` with `acldefault` for a null ACL — a null `proacl`
-means implicit `PUBLIC EXECUTE`, and `aclexplode(NULL)` returns nothing, so a
-query that forgets the `COALESCE` reports no grants at all), `pg_default_acl`,
-and column comments. Grants were compared by hand on 3 November and that is
-where finding 0 came from.
+```sql
+-- acl: every grant on every relation, sequence and routine
+SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT k, string_agg(DISTINCT gp, ',' ORDER BY gp) AS v FROM (SELECT 'R ' || c.relname AS k, (CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END) || ':' || a.privilege_type AS gp FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace, aclexplode(COALESCE(c.relacl, acldefault((CASE WHEN c.relkind = 'S' THEN 'S' ELSE 'r' END)::"char", c.relowner))) a WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m','f','S') UNION ALL SELECT 'F ' || p.oid::regprocedure::text, (CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END) || ':' || a.privilege_type FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace, aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a WHERE n.nspname = 'public' AND p.prokind IN ('f','p') AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')) y GROUP BY k) x;
+
+-- defacl: the default privileges, per granting role and object type
+SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT d.defaclrole::regrole::text || '.' || d.defaclobjtype::text AS k, d.defaclacl::text AS v FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace WHERE n.nspname = 'public') x;
+```
+
+**`COALESCE` with `acldefault` is the whole trick in `acl`**, and leaving it out
+is how a grants audit reports a clean result on a database full of grants. A
+null `relacl` or `proacl` does not mean "nothing granted" — it means the
+built-in default applies, which for a function is `PUBLIC EXECUTE`. And
+`aclexplode(NULL)` returns no rows, so the objects with the most permissive
+setting are exactly the ones a careless query drops.
+
+`PUBLIC` prints as `-` through `regrole`, hence the `CASE`. That matters here
+more than it looks: `PUBLIC` is the grantee that caused both of this schema's
+grant surprises.
+
+The other `CASE` needs its `::"char"` cast. `acldefault`'s first argument is
+`"char"`, and a `CASE` expression resolves to `text`, so the query fails on
+both databases without it — while `acldefault('f', …)` in the function branch
+works untouched, because a bare literal is untyped and coerces.
+
+**`defacl` is what keeps the alignment true.** The four files of 3 November
+made `postgres`'s three default entries identical on the two databases; nothing
+stops the next `ALTER DEFAULT PRIVILEGES`, or a Supabase platform change,
+separating them again silently. This query is the only thing that would say so.
+It also shows `supabase_admin`'s entries, which cannot be changed and should
+be read as a constant rather than a finding.
+
+**One thing these eight still do not cover:** column comments. Not nothing — a
+comment is where this schema records why a column exists — but the only one of
+the gaps that cannot mislead anybody about access.
 
 ## Is anything still arriving
 
@@ -223,53 +253,53 @@ How the app (Vercel project `hellophone`) reaches them:
   Production only. No preview can take in a real call, so real calls reach
   only the production database.
 
-### Default privileges differ, and staging is the looser one
+### Default privileges, aligned 3 November 2026
 
-New functions created by `postgres` in `public` are granted to a different set
-on each database, by `pg_default_acl` rather than by anything a migration
-writes:
+What a new object in `public` is granted on creation comes from
+`pg_default_acl`, not from anything a migration writes. Until 3 November the
+two databases differed, and **staging was the looser one** — which is the wrong
+way round, because it meant a migration that forgot its `REVOKE` was *hidden*
+by the test environment instead of caught by it. Four files closed the gap:
+`20261103T1600` (`anon`), `1700` (new tables read-only), `1800`
+(`service_role`), `1900` (sequences).
 
-| | Granted to on creation |
-|---|---|
-| Production | `postgres`, `authenticated` |
-| Staging | `postgres`, `authenticated`, `service_role` — `anon` removed by `20261103T1600` |
+What `postgres` now grants on creation, identically on both:
 
-So a migration that creates a function and **forgets its `REVOKE`** leaves that
-function callable by `anon` on staging, and would not have on production. The
-test environment is more permissive than the live one, which means it hides
-this particular mistake instead of catching it — and a function reachable by
-`anon` is exactly what migration 037 existed to clean up, nine of them at once.
+| | `authenticated` | `anon` | `service_role` |
+|---|---|---|---|
+| Tables | `SELECT` | — | `TRUNCATE`, `REFERENCES`, `TRIGGER`, `MAINTAIN` |
+| Sequences | `SELECT`, `USAGE` | — | — |
+| Functions | `EXECUTE` | — | — |
 
-Two consequences while that remains true:
+**This is the first time a clean staging run means something about production's
+grants**, and it is worth not over-reading. Two things still make an explicit
+check worth writing into every verification block, as they have been since
+`20261030T1930`:
 
-- **Never conclude from a clean staging run that the grants are right.** Check
-  `has_function_privilege('anon', …)` explicitly, as the verification blocks
-  from `20261030T1930` onward do.
-- Every new function still gets the explicit pair, on both databases:
-  `REVOKE ALL … FROM PUBLIC, anon;` then `GRANT EXECUTE … TO authenticated;`
-  — see **SECURITY DEFINER functions** below. The revoke is not redundant on
-  production; it is what makes the two databases agree.
+- **`supabase_admin` has its own defaults in `public`**, granting `anon`,
+  `authenticated` and `service_role` everything it creates — twelve privileges
+  on each database. `ALTER DEFAULT PRIVILEGES` is per granting role and
+  `postgres` is not a member of `supabase_admin`, so no migration can change
+  them. That is why `btree_gist`'s 188 functions in `public` still grant `anon`
+  `EXECUTE` directly on both. Anything created *by* `supabase_admin` — which
+  includes some paths through the Supabase dashboard — follows those defaults
+  and arrives wide open.
+- **A default is not retroactive.** It decides what a new object gets and says
+  nothing about the 98 relations already there, or the 114 functions on
+  production and 112 on staging — that difference is `014`, which has never
+  run on staging.
 
-Aligning staging's defaults to production's would make staging a truer test.
-That is a change to `ALTER DEFAULT PRIVILEGES`, it affects every function
-created afterwards, and it does not touch the ones already there — so it wants
-its own migration and its own review, not a line in another one.
+So every new function still gets the explicit pair, on both databases:
+`REVOKE ALL … FROM PUBLIC, anon;` then `GRANT EXECUTE … TO authenticated;` —
+see **SECURITY DEFINER functions** below. The revoke is no longer compensating
+for a difference between the databases; it is stating the intent in the file,
+where a reviewer can see it.
 
-**Done for `anon`, in `20261103T1600`**, with one limit that matters: nothing
-**`postgres`** grants by default in `public` reaches `anon` any more, and the
-grants `anon` already held were swept. But `ALTER DEFAULT PRIVILEGES` is per
-granting role, and `public` holds a second set belonging to `supabase_admin`
-which still grants `anon` everything — twelve privileges on each database — and
-`postgres` is not a member of `supabase_admin`, so no migration can change
-them. That is why `btree_gist`'s 188 functions in `public` still grant `anon`
-`EXECUTE` directly on both databases. See **Grants on a new table** for the
-same limit on the table side.
-
-Two things remain beyond that. `service_role` is still looser on staging and is
-a file of its own. And `anon` can still `EXECUTE` 68 of our own functions
-**through `PUBLIC`**, which a revoke from `anon` does not touch — `PUBLIC` is a
-separate grant to every role, and that is the trap to remember: *revoking a
-role's own grant does not take away what it holds through `PUBLIC`*.
+One thing remains: `anon` can still `EXECUTE` 68 of our own functions **through
+`PUBLIC`**. `PUBLIC` is a separate grant held by every role, so the trap to
+remember is that *revoking a role's own grant does not take away what it holds
+through `PUBLIC`* — an `anon`-only sweep on production would have changed
+nothing and been reported as a fix.
 
 Those 68 can be swept in one statement rather than decided one at a time, for
 two reasons both established by measurement on 3 November:
