@@ -2,10 +2,30 @@
 -- 20261103T1200_schema_migrations_ledger.sql
 -- The Hub — a record of which migration ran on which database.
 --
--- APPLIED ON STAGING in an earlier form (block md5 7fa3265e) whose ran_md5
--- included the SQL editor's trailer. This file supersedes it, reshapes the
--- table in place, and re-records its own row so the bad fingerprint is
--- overwritten. It has not run on production.
+-- APPLIED ON STAGING AND PRODUCTION, 2026-11-03, block md5
+-- f07ecbce3447791b9ed7688b50328e9c. It superseded an earlier form (block
+-- 7fa3265e) whose ran_md5 included the SQL editor's trailer; staging held that
+-- form and took the reshape path, production held nothing and took the create
+-- path, and the create path was rehearsed on staging in a rolled-back run
+-- first. Both databases now record ran_md5 f07ecbce for this file, equal to
+-- the block md5, so the strip works.
+--
+-- TWO BUGS IN THE VERIFICATION BLOCK BELOW, FIXED IN PLACE 2026-11-03. The
+-- body is untouched and its md5 is unchanged.
+--
+--   The trailer test used LIKE '%-- source: dashboard%' on the stripped text
+--   and so always reported true — this file quotes the trailer in its own
+--   comments, in the COMMENT ON FUNCTION text, and in the test line itself.
+--   It was testing whether the file mentions the trailer, not whether the
+--   strip removed one. Now anchored on the end of the text, which is the only
+--   place a real trailer can be.
+--
+--   The expected length difference said 70-100. The trailer is 110 characters.
+--   A range invented rather than measured, and wrong.
+--
+-- Neither bug reached the database. Both are the same mistake: a check written
+-- to pass rather than to fail, in a file whose whole subject is checks that
+-- quietly stop meaning anything.
 --
 -- WHY. Neither database records Hub migrations. The only migration tables are
 -- Supabase's own, for auth, realtime and storage. So the question "has this
@@ -322,12 +342,13 @@ COMMIT;
 --   -- The trailer, first, because everything else assumes it is gone.
 --   r := r || 'raw current_query() length / stripped length: '
 --          || length(current_query()) || ' / ' || length(submitted_text())
---          || '   (expect stripped to be ~70-100 shorter in the SQL editor, '
---          || 'and identical under psql)' || chr(10);
---   r := r || 'trailer survives the strip: '
---          || (submitted_text() LIKE '%-- source: dashboard%')::text
---          || '   (expect false — if true, the editor changed its trailer and '
---          || 'submitted_text() needs its regex updated)' || chr(10);
+--          || '   (expect stripped to be exactly 110 characters shorter in the '
+--          || 'SQL editor, and identical under psql)' || chr(10);
+--   r := r || 'a trailer survives at the END of the stripped text: '
+--          || (submitted_text() ~ E'\n-- source: dashboard\n-- user: [^\n]*\n-- date: [^\n]*$')::text
+--          || '   (expect false. Anchored, NOT a LIKE on the marker: this file '
+--          || 'quotes the trailer in its own comments, so a LIKE matched the '
+--          || 'file and reported true however well the strip worked)' || chr(10);
 --   r := r || 'stripped text ends with my last line: '
 --          || quote_literal(right(submitted_text(), 40)) || chr(10);
 --
