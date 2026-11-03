@@ -62,6 +62,30 @@
 -- Safe to run twice: the table is added if absent, the drift checks tell
 -- "already applied" from "something else changed it", and a second run
 -- reinstalls the same bodies.
+--
+-- APPLIED to staging and production, 3 Nov 2026, from the file hashed
+-- a1d032a6. The BEGIN … COMMIT body is unchanged since (sha256 feddc626,
+-- 14047 bytes) — what is below is what ran. Both databases hold:
+--   request_notify_sms_confirmation  4182e7294014e2dc91938700d747121a
+--   confirm_notify_sms               a93171849eb8453d0b723065ad1d977d
+--     RETURNS TABLE (status text, attempts_left integer)
+-- notify_sms_sends: RLS on, no policies, SELECT false for authenticated,
+-- service_role and anon, 0 rows. Both function comments present.
+--
+-- ONE ACL DIFFERENCE, AND IT IS NOT THIS FILE'S DOING.
+-- confirm_notify_sms is granted to {postgres, authenticated} on production
+-- and {postgres, authenticated, service_role} on staging. The grants below
+-- are identical; the difference comes from pg_default_acl, which hands new
+-- functions in public to a different set on each database. 040's comment
+-- records the same thing. db/README.md, "Which database is which", now
+-- states it — and states which way round the risk runs: staging is the
+-- LOOSER of the two, so a migration that forgets its REVOKE passes there and
+-- would not have on production. Staging hides that mistake rather than
+-- catching it.
+--
+-- The verification block ran in full on STAGING and not on production: it
+-- creates users. NS005 was checked separately afterwards and nothing in the
+-- block exercises it; a test for it was added below, outside the body.
 -- =============================================================================
 
 BEGIN;
@@ -497,6 +521,18 @@ COMMIT;
 --   r := r || 'and it is still confirmed: '
 --          || (SELECT notify_sms_confirmed_at IS NOT NULL FROM users WHERE id = v_user)
 --          || '   (expect true)' || chr(10);
+--
+--   -- ---- not signed in --------------------------------------------------------
+--   -- The only refusal in confirm_notify_sms, and the only one the rest of
+--   -- this block never reaches: everything above runs with app.user_id set.
+--   PERFORM set_config('app.user_id', '', true);
+--   BEGIN
+--     PERFORM c.status FROM confirm_notify_sms('999999') c;
+--     r := r || 'confirming while not signed in: ALLOWED (BAD)' || chr(10);
+--   EXCEPTION WHEN others THEN
+--     r := r || 'not signed in refused [' || SQLSTATE || '] ' || SQLERRM
+--            || '   (expect NS005)' || chr(10); END;
+--   PERFORM set_config('app.user_id', v_user::text, true);
 --
 --   -- ---- no number at all ----------------------------------------------------
 --   BEGIN
