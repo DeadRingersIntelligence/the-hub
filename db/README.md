@@ -105,6 +105,43 @@ because staging was missing `014`, and refuses to run on production by design.
 Staging therefore has one row more, permanently. The rows they share should
 still agree exactly; it is the join that means something, not the total.
 
+### A repair file must refuse on the database it is not for
+
+This is the rule that keeps a one-sided row from being ambiguous, and it is
+worth stating because the obvious alternatives are both worse.
+
+A row means *this file ran here*. So the absence of a row means *it did not run
+here*, and for a repair file that is the truth — but it does not say whether it
+was skipped on purpose or missed. **The fix is not a note and not a mirror
+row.** It is that the file itself refuses:
+
+```
+RAISE EXCEPTION '014''s objects are all present; nothing to do here'
+  USING HINT = 'This is production, or staging has already had this file.
+                Not an error to fix — stop.';
+```
+
+Somebody who sees the gap, concludes production is behind and runs the file is
+stopped at the moment of the mistake and told why, which beats a comment they
+would have had to find first. The absence is backed by an enforced refusal
+rather than by documentation.
+
+The two alternatives were considered and rejected:
+
+- **Guarding the file so it is a clean no-op, then running it on both.** That
+  changes the text, so the same filename would carry two different `ran_md5`
+  values — which is the exact signal this schema treats as drift. It would
+  have to be a second file, not an edit.
+- **A row on the other database saying it deliberately did not run.** That
+  makes one row mean "did not run here" while every other row, backfills
+  included, means "ran here". It removes the ambiguity by introducing a worse
+  one.
+
+A mirror file that asserts the other database is already correct and records
+itself is defensible, and it was declined: it makes every one-sided file cost
+two, and the thing it buys — a matching row count — is the comparison this
+section just said not to make.
+
 ### How a row got there
 
 `recorded_how` is `'self'` or `'backfill'`, and a constraint ties it to
