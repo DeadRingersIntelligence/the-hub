@@ -2,6 +2,23 @@
 -- 20261103T2100_fourteen_on_staging.sql
 -- The Hub — staging gets the migration it never ran.
 --
+-- APPLIED ON STAGING ONLY, 2026-11-03, block md5
+-- 9cf13d0114d86ba0bfedd649faa3f643. Production was not run and must not be:
+-- section 1 refuses there by design, because 014's objects already exist.
+-- Lines 146-296 were checked byte-for-byte against main's 014 after the merge.
+--
+-- PARITY AFTERWARDS. The fn, typ, con and col fingerprints are now identical
+-- on the two databases. acl differs by exactly the two entries this file
+-- predicted and by nothing else: PUBLIC EXECUTE on section_scores and
+-- behavior_detail, which production carries and staging never received.
+-- Excluding those two it is ab3fad62 on both. The PUBLIC sweep closes it.
+--
+-- ONE ASYMMETRY THIS FILE CREATES, worth knowing before a later check trips on
+-- it: the two ledgers are no longer the same length. Staging has 21 rows and
+-- production 20, because this file can only ever run on one of them. Compare
+-- ledgers by filename, not by count. Everything before this one still agrees,
+-- fingerprint b3801105 on both.
+--
 -- WHAT IS MISSING. 014_measurement_and_menu_scoring.sql ran on production on
 -- or about 7 October and has never run on staging. Staging therefore has no
 -- measurement_type and no section_scoring type, no behaviors.measurement_type,
@@ -13,10 +30,10 @@
 -- while looking for something else.
 --
 -- WHY THE BODY BELOW IS NOT MINE. Section 2 is
--- db/migrations/014_measurement_and_menu_scoring.sql as it stands on main —
--- sha256 ddd39e1301afdd1893af297684fbb7a64c26e9ea6f565e46d9a994aaf6fca348,
--- 9,037 bytes — cut byte-for-byte from BEGIN to COMMIT and not edited in any
--- way. That is deliberate. Both functions it creates are LANGUAGE sql, so
+-- db/migrations/014_measurement_and_menu_scoring.sql AS IT STANDS ON MAIN —
+-- the 7 October version from commit 3cb3758, sha256
+-- ddd39e1301afdd1893af297684fbb7a64c26e9ea6f565e46d9a994aaf6fca348, 9,037
+-- bytes — cut byte-for-byte from BEGIN to COMMIT and not edited in any way. That is deliberate. Both functions it creates are LANGUAGE sql, so
 -- their bodies are stored as written, and a single character of difference
 -- would leave the two databases disagreeing forever in a way the structural
 -- diff reports as drift. Retyping it would have traded a missing migration
@@ -415,8 +432,12 @@ COMMIT;
 --          || chr(10);
 --   r := r || 'rubric_behaviors with a credit_value: '
 --          || (SELECT count(*) FROM rubric_behaviors WHERE credit_value IS NOT NULL)
---          || '   (expect six per rubric that has Follow-Up: three at 1.00 and '
---          || 'three at 0.50)' || chr(10);
+--          || '   (expect 36 on staging and 31 on production. NOT six per '
+--          || 'rubric: that was my guess from reading the six VALUES rows, and '
+--          || 'the backfill only credits a behaviour a rubric actually '
+--          || 'contains. Production''s six rubrics hold 5,5,5,6,5,5; staging '
+--          || 'has a seventh rubric, which is the whole of the difference)'
+--          || chr(10);
 --   r := r || '    values: '
 --          || COALESCE((SELECT string_agg(DISTINCT credit_value::text, ',' ORDER BY credit_value::text)
 --                         FROM rubric_behaviors WHERE credit_value IS NOT NULL), 'NONE')
