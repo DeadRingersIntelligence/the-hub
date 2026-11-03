@@ -112,8 +112,11 @@ worth stating because the obvious alternatives are both worse.
 
 A row means *this file ran here*. So the absence of a row means *it did not run
 here*, and for a repair file that is the truth — but it does not say whether it
-was skipped on purpose or missed. **The fix is not a note and not a mirror
-row.** It is that the file itself refuses:
+was skipped on purpose or missed. Two things close that, and they do different
+jobs.
+
+**The file itself refuses on the database it is not for.** That is what stops
+the mistake:
 
 ```
 RAISE EXCEPTION '014''s objects are all present; nothing to do here'
@@ -126,7 +129,32 @@ stopped at the moment of the mistake and told why, which beats a comment they
 would have had to find first. The absence is backed by an enforced refusal
 rather than by documentation.
 
-The two alternatives were considered and rejected:
+**And the row's own `note` says it is one-sided — written when the file is.**
+That answers the person who is only looking, not running, and it costs nothing
+at write time. A one-sided file's `record_migration` call should say in as many
+words which database it is for, why the other does not need it, and that it
+refuses there.
+
+The refusal and the note are not alternatives. One prevents the wrong action;
+the other prevents the wrong conclusion.
+
+**A ledger row is never edited after it is written.** It is the record of a
+run, written once by the thing that ran — the same rule as *an applied
+migration is annotated, never amended*, and for the same reason. Where a file's
+header can be corrected after the fact, a row cannot: the header is commentary
+and the row is evidence.
+
+That invariant costs something here, and the cost is accepted.
+`20261103T2100` was written hours before the note convention existed, so its
+row does not say it is staging-only. Its **header** does, on main, and it
+refuses on production, and this section exists. A migration to append a
+sentence to that one row was written and withdrawn: the before-and-after check
+in it proved that *that* file touched nothing but `note`, which is not the same
+as protecting the invariant from the next file that does not bother. "Rows are
+never touched" is a rule anybody can hold; "only `note` may move" has to be
+re-proved every time.
+
+Four alternatives were considered and rejected:
 
 - **Guarding the file so it is a clean no-op, then running it on both.** That
   changes the text, so the same filename would carry two different `ran_md5`
@@ -137,10 +165,35 @@ The two alternatives were considered and rejected:
   included, means "ran here". It removes the ambiguity by introducing a worse
   one.
 
-A mirror file that asserts the other database is already correct and records
-itself is defensible, and it was declined: it makes every one-sided file cost
-two, and the thing it buys — a matching row count — is the comparison this
-section just said not to make.
+- **A mirror file** that asserts the other database is already correct and
+  records itself. Defensible, and declined: it makes every one-sided file cost
+  two, and the thing it buys — a matching row count — is the comparison this
+  section just said not to make.
+- **Appending the explanation to the existing row's `note`.** The most
+  tempting, because `note` has always been "anything the next reader needs" and
+  it introduces no new meaning. Rejected on the precedent, above: the first
+  edit to a ledger row is the expensive one, whatever it says.
+
+### How a repair file knows whether it applies
+
+A file that refuses on one database needs a test, and there is a choice of two.
+`current_database()` is `postgres` on both of ours, so it cannot be the test.
+
+**Prefer asking what is present over asking which database this is.**
+`20261103T2100` does not ask where it is running; it counts the eight objects
+`014` creates and refuses if they are already there. That answers the question
+that actually matters — *does this repair apply here?* — and it stays correct
+in cases a name or a marker does not. A clone of production stood up as a new
+staging carries production's identity with it, so a marker would call it
+production; but it also carries `014`, so a presence test still refuses,
+correctly, for the right reason.
+
+A named environment marker — a row, or a designated setting — is the fallback
+for a file where **nothing in the schema can tell the databases apart**: a data
+correction that applies only to staging's seed, say. Such a marker is a second
+thing to keep true, and the clone case is exactly how it goes stale, so
+resetting it belongs in whatever stands up a staging database rather than in a
+migration. A presence test has no such upkeep.
 
 ### How a row got there
 
