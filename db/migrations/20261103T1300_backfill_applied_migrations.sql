@@ -2,6 +2,24 @@
 -- 20261103T1300_backfill_applied_migrations.sql
 -- The Hub — the eleven timestamped migrations, recorded after the fact.
 --
+-- APPLIED ON STAGING AND PRODUCTION, 2026-11-03, block md5
+-- bcf7f807327f3b920be2b30d36676248, recorded as its own ran_md5 on both.
+-- Thirteen rows on each, content fingerprint 96e45e0b.
+--
+-- TWO CORRECTIONS, 2026-11-03. The body is untouched and its md5 is unchanged.
+--
+--   THE COUNT BELOW SAID SEVEN ANNOTATED FILES. It is eight: 20261030T1500,
+--   20261102T1500, T1600, T1800, T2200, T2330, T2345 and 20261103T1000. The
+--   rows themselves are right — eight of them say "annotated" — and only the
+--   prose summary was wrong, which is the direction that matters least and is
+--   still a count asserted rather than taken.
+--
+--   THE VERIFICATION'S CLOSING LISTING IS PRINTED AFTER the re-run test, which
+--   deliberately fakes a self-recorded row on 20261102T2200. So the listing
+--   shows that row as "self-recorded, ran_len 999" — an artefact of the test
+--   two lines above it, undone by the rollback with everything else. Fixed in
+--   place by printing the listing before the test instead.
+--
 -- WHAT THIS IS. 20261103T1200 created a ledger that starts empty, because a
 -- ledger that guesses is worse than one that starts honest. This file fills in
 -- the one window where we are not guessing: the eleven timestamped migrations
@@ -232,7 +250,20 @@ COMMIT;
 --          || '   (expect true — a row without its provenance is the thing '
 --          || 'this file was written to avoid)' || chr(10);
 --
+--   -- The listing comes BEFORE the re-run test, because that test fakes a
+--   -- self-recorded row on 2200 and a listing printed after it shows the fake
+--   -- as though it were the ledger's real state.
+--   r := r || chr(10) || 'the ledger as it now reads:' || chr(10);
+--   r := r || COALESCE((
+--          SELECT string_agg(
+--                   '    ' || rpad(filename, 56)
+--                   || CASE WHEN ran_md5 IS NULL THEN 'backfilled'
+--                           ELSE 'self-recorded, ran_len ' || ran_len END,
+--                   chr(10) ORDER BY filename)
+--            FROM schema_migrations), '    NONE') || chr(10) || chr(10);
+--
 --   -- Running it twice must not disturb a row that has since recorded itself.
+--   -- Everything below this line is the test's own doing, not the ledger's.
 --   UPDATE schema_migrations
 --      SET ran_md5 = 'pretend-self-recorded', ran_len = 999
 --    WHERE filename = '20261102T2200_merge_chains.sql';
@@ -242,18 +273,9 @@ COMMIT;
 --   r := r || 'a re-run leaves a self-recorded row alone: '
 --          || (SELECT (ran_md5 = 'pretend-self-recorded' AND sha256 <> 'zzz')::text
 --                FROM schema_migrations WHERE filename = '20261102T2200_merge_chains.sql')
---          || '   (expect true)' || chr(10);
---
---   r := r || chr(10) || 'the ledger as it now reads:' || chr(10);
---   FOR n IN 1..1 LOOP
---     r := r || COALESCE((
---            SELECT string_agg(
---                     '    ' || rpad(filename, 56)
---                     || CASE WHEN ran_md5 IS NULL THEN 'backfilled'
---                             ELSE 'self-recorded, ran_len ' || ran_len END,
---                     chr(10) ORDER BY filename)
---              FROM schema_migrations), '    NONE') || chr(10);
---   END LOOP;
+--          || '   (expect true — 2200 is faked self-recorded by the two '
+--          || 'statements above, and the listing printed earlier is the real one)'
+--          || chr(10);
 --
 --   RAISE EXCEPTION 'VERIFY 20261103T1300_backfill_applied_migrations (all rolled back) %',
 --                   chr(10) || r;
