@@ -295,7 +295,7 @@ these, on either database, has found a change made since.
 | `con` | `ced2d050bcded68c18cf2e6e770a9d2b` | 50386 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
 | `fn` | `99d7b13a6e311ac9d2f7e4cd50b172b0` | 10689 |
-| `mig` | `d6144dec14cd7136132c36cb53d9c8e7` | 15703 |
+| `mig` | `579d28a007a83087596f1844a804f8ec` | 15850 |
 | `trg` | `087000700dea24395739dab7f52f3ef0` | 6543 |
 | `typ` | `a713741449e51c3fa3d8d84849289f5a` | 6467 |
 
@@ -652,6 +652,54 @@ correct behaviour while its code did the other thing.
 The question to ask of every `set_config` is not whether the value is right but
 **how long it is meant to last**, and on a pooled connection the answer is
 almost always the transaction.
+
+## A read policy is not a write policy
+
+`CREATE POLICY x ON t USING (...)` with no `FOR` clause is **`FOR ALL`**, and
+with no `WITH CHECK` the `USING` expression governs writes as well as reads. A
+policy written to decide who may *see* a row then decides who may change or
+delete it.
+
+Nine policies in this schema were written that way and all nine have been
+fixed: the six `<t>_readable` reference tables (`20261103T1000`),
+`data_sharing_agreements_tenant` (`20261104T1200`), and `organizations_tenant`
+and `partners_visible` (`20261104T1300`). The consequences ranged from any
+signed-in person at any firm being able to rewrite the cross-firm benchmark
+rows, to the receiving party of a data-sharing agreement being able to change
+the scope it had been granted, to any member of a firm — at any seniority,
+with no `can_manage_settings()` check — being able to rename or delete that
+firm.
+
+**Write `FOR SELECT` when a policy is a read policy.** And in review: *a policy
+whose name or comment says see, visible or readable, and whose `polcmd` is
+`*`, is wrong until somebody says otherwise.* The tell was in the source every
+time — `_readable`, `partners_visible`, "Both sides of a sharing agreement may
+see it".
+
+**The catalogue cannot find the rest of them.** `polcmd = '*'` is correct for a
+great many policies that properly govern writes — 76 of 133 at the last count —
+so scanning for it is noise, and the write-policy audit of 4 November did not
+find these because it asked whether each policy was *scoped*, which all 112
+were. What found them was reading them. The scan that would work is a list of
+tables the application never writes, checked against the policies that permit
+writes, and it needs the application rather than the database.
+
+### Which lock to use when a table should not be written
+
+Two files fixed the same shape four weeks apart and used opposite mechanisms,
+because the rulings differed. The rule for choosing:
+
+- **Nobody writes it through the API, not even Dead Ringers** — revoke
+  `INSERT`, `UPDATE`, `DELETE` from the client roles and install **no write
+  policy at all**. With RLS on and nothing admitting a write, a grant restored
+  by accident permits nothing. `data_sharing_agreements` is this shape; ending
+  an agreement means a migration that sets `revoked_on`, and amending one means
+  a new row rather than an edit.
+- **Only Dead Ringers writes it** — keep the grants and install a write policy
+  of `USING (is_internal()) WITH CHECK (is_internal())`. The grants must stay,
+  because internal staff sign in as `authenticated` like everyone else and a
+  revoke would stop them too. `organizations`, `partners` and the six
+  reference tables are this shape.
 
 ## SECURITY DEFINER functions
 
