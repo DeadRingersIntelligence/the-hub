@@ -216,8 +216,8 @@ COMMIT;
 --   or readable and whose polcmd is '*' is wrong until somebody says otherwise.
 --
 -- * THE CATALOGUE CANNOT FIND THE REST OF THEM. polcmd = '*' is correct for a
---   great many policies that properly govern writes — 76 of 133 at the last
---   count — so a scan for it is noise. What found these nine was reading them,
+--   great many policies that properly govern writes — rather more than half of
+--   them — so a scan for it is noise. What found these nine was reading them,
 --   and the write-policy audit of 4 November did not, because it asked whether
 --   each policy was scoped and all 112 were. A list of tables the application
 --   never writes, checked against the policies that allow writes, is the scan
@@ -226,8 +226,9 @@ COMMIT;
 -- * NOBODY CAN CREATE AN ORGANIZATION OR A PARTNER THROUGH THE API EITHER, now
 --   that INSERT is governed by is_internal(). That follows from the ruling and
 --   is almost certainly right — firms are onboarded by Dead Ringers — but it
---   was not asked about explicitly, and it is the kind of thing worth knowing
---   before somebody builds a self-serve sign-up.
+--   was not asked about explicitly. It is now also recorded in db/README.md,
+--   because whoever builds onboarding will read the access rules and will not
+--   read this file.
 -- =============================================================================
 
 -- =============================================================================
