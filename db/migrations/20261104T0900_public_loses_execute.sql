@@ -89,6 +89,19 @@
 --   name it, and locations.is_service_location is a generated column computed
 --   from it.
 --
+-- THE WHOLE CATEGORY, scanned on 4 November rather than discovered one member
+-- at a time, is three functions. is_e164 is named in CHECK constraints on five
+-- tables: contact_phones, directory_entries, phone_numbers, routing_schedules
+-- and users. location_type_is_service is as above. The third is
+-- submitted_text, which supplies the defaults for schema_migrations.ran_md5
+-- and ran_len — and which is NOT public, correctly, because the only thing
+-- that writes that table is record_migration, a SECURITY DEFINER function
+-- running as postgres.
+--
+-- That third member is the one that defines the category properly. It is "the
+-- system calls this during a write", not "this must be PUBLIC". Whether a
+-- member needs PUBLIC depends entirely on who writes the table it guards.
+--
 -- THE REASONING ON THE SECOND ONE, because an earlier draft of this header had
 -- it half right and it is worth being exact. A first draft said a constraint's
 -- function "is not somewhere to discover a privilege subtlety by experiment",
@@ -375,7 +388,8 @@ COMMIT;
 --          || chr(10)
 --          || '   (expect those three plus is_e164 and location_type_is_service '
 --          || '— five. 20261103T1800''s verification said four, written before '
---          || 'the second exception existed; that number is now wrong by one)' || chr(10);
+--          || 'the second exception existed; it has since been corrected to '
+--          || 'five, so the two files agree)' || chr(10);
 --
 --   -- The signed-in path, which is what would break if the premise were wrong.
 --   r := r || 'functions authenticated can EXECUTE: '
