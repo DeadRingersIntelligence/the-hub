@@ -3,6 +3,15 @@
 -- The Hub — the server's key gets what production already gives it,
 -- on both databases.
 --
+-- APPLIED ON STAGING AND PRODUCTION, 2026-11-03, block md5
+-- 1530a9b79f0c79c95017661aade13a29.
+--
+-- ONE NUMBER IN THE VERIFICATION WAS CORRECTED ON 2026-11-04: it said to
+-- expect four routines reachable by service_role after the PUBLIC sweep, and
+-- the answer is five. 20261104T0900 kept PUBLIC on location_type_is_service as
+-- well as is_e164, because the system calls it from two CHECK constraints and
+-- a generated column. The body is untouched.
+--
 -- WHAT service_role IS. The key the server holds, set as
 -- SUPABASE_SERVICE_ROLE_KEY on Production only. It has BYPASSRLS, so every
 -- policy in the schema is invisible to it: whatever it is granted, it gets,
@@ -328,9 +337,12 @@ COMMIT;
 --          || 'grants plus the 68 — 66 on staging, which is short 014''s two — '
 --          || 'that PUBLIC reaches. NOT three: PUBLIC includes service_role '
 --          || 'like every other role, and this file does not touch PUBLIC. '
---          || 'After the PUBLIC sweep expect FOUR, the three plus is_e164, '
---          || 'which keeps PUBLIC deliberately. An unexpected NAME at any '
---          || 'point means an overload was spared by the proname match)' || chr(10);
+--          || 'After the PUBLIC sweep expect FIVE: the three plus is_e164 and '
+--          || 'location_type_is_service, both of which keep PUBLIC '
+--          || 'deliberately. This line said FOUR until 20261104T0900 found a '
+--          || 'second function the system calls during writes. An unexpected '
+--          || 'NAME at any point means an overload was spared by the proname '
+--          || 'match)' || chr(10);
 --
 --   r := r || 'relations where service_role holds SELECT/INSERT/UPDATE/DELETE: '
 --          || (SELECT count(DISTINCT c.oid) FROM pg_class c
