@@ -228,8 +228,9 @@ minutes, and the cost of not running it was a month of staging proofs that were
 weaker than they read.
 
 ```sql
--- col: every column, its type, nullability and default
-SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT c.table_name || '.' || c.column_name AS k, c.data_type || CASE WHEN c.data_type = 'USER-DEFINED' THEN ':' || c.udt_name WHEN c.data_type = 'ARRAY' THEN ':' || c.udt_name ELSE '' END || '|null=' || c.is_nullable || '|def=' || coalesce(c.column_default, '') AS v FROM information_schema.columns c JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name WHERE c.table_schema = 'public') x;
+-- col: every column, its type WITH ITS MODIFIER, nullability, default and
+-- whether it is generated
+SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT c.relname::text || '.' || a.attname::text AS k, format_type(a.atttypid, a.atttypmod) || '|null=' || (NOT a.attnotnull)::text || '|def=' || coalesce(pg_get_expr(d.adbin, d.adrelid), '') || '|gen=' || coalesce(nullif(a.attgenerated::text, ''), '-') AS v FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m','f') AND a.attnum > 0 AND NOT a.attisdropped) x;
 
 -- typ: every enum and its labels IN ORDER (order is part of the type)
 SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT t.typname AS k, string_agg(e.enumlabel, ',' ORDER BY e.enumsortorder) AS v FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace JOIN pg_enum e ON e.enumtypid = t.oid WHERE n.nspname = 'public' GROUP BY t.typname) x;
@@ -291,7 +292,7 @@ these, on either database, has found a change made since.
 | query | md5 | characters |
 |---|---|---|
 | `acl` | `918bcbaea7e89c303c0a40b5261c22e3` | 43287 |
-| `col` | `adffe4348d154de655c6e6d734d9599f` | 68914 |
+| `col` | `6bd6f01cda27cf51ce7d8ef2a7623dfd` | 76918 |
 | `con` | `ced2d050bcded68c18cf2e6e770a9d2b` | 50386 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
 | `fn` | `99d7b13a6e311ac9d2f7e4cd50b172b0` | 10689 |
@@ -311,9 +312,24 @@ what it does, and — the point of the whole thing — **a mismatch found later
 always means a change nobody intended**, because every intended one arrived
 with its own update.
 
-Two things it does not prove, so that a row of matching hashes is not read as
-more than it is: `col` cannot see `numeric` precision, so `numeric(4,2)` and a
-bare `numeric` compare equal; and nothing here covers column comments.
+One thing it does not prove, so that a row of matching hashes is not read as
+more than it is: nothing here covers column comments.
+
+`col` used to be a second gap. It read `information_schema.columns.data_type`,
+which drops the type modifier, so `numeric(4,2)` and a bare `numeric` compared
+equal — and that was not theoretical: **30 columns carry a modifier the old
+query could not see**, across nine `numeric` precisions and two `character`
+widths. All 30 agree today, which is exactly why it would have gone unnoticed:
+a gap that currently reports the right answer is the hardest kind to find.
+
+The query now reads `format_type(atttypid, atttypmod)` from the catalogue
+rather than `information_schema`, which also means it does not depend on the
+privileges of whoever runs it. Two details of its format are deliberate, and
+both are about reading a 77,000-character diff rather than about correctness:
+`|gen=` is appended to **every** entry, `-` or `s`, so a difference shows as a
+changed field rather than a missing one; and nullability reads `true`/`false`
+rather than `YES`/`NO`, which is `information_schema`'s convention and no
+longer ours. Of 1149 columns, 2 are generated.
 
 ## Is anything still arriving
 
@@ -416,10 +432,14 @@ check worth writing into every verification block, as they have been since
   `authenticated` and `service_role` everything it creates — twelve privileges
   on each database. `ALTER DEFAULT PRIVILEGES` is per granting role and
   `postgres` is not a member of `supabase_admin`, so no migration can change
-  them. That is why `btree_gist`'s 188 functions in `public` still grant `anon`
-  `EXECUTE` directly on both. Anything created *by* `supabase_admin` — which
-  includes some paths through the Supabase dashboard — follows those defaults
-  and arrives wide open.
+  them. `btree_gist`'s 188 functions were the visible consequence: all owned by
+  `supabase_admin`, all granting `anon` `EXECUTE`, all beyond reach of any
+  migration. `20261104T2200` moved the extension into the `extensions` schema
+  instead, which took them out of every `public` audit at once — **the fix for
+  something `supabase_admin` owns is usually to get it out of `public`, not to
+  fight the grant.** Anything created *by* `supabase_admin` — which includes
+  some paths through the Supabase dashboard — still follows those defaults and
+  arrives wide open.
 - **A default is not retroactive.** It decides what a new object gets and says
   nothing about the 98 relations and 114 functions already there. (Staging had
   112 until `20261103T2100` gave it `014`'s two.)
