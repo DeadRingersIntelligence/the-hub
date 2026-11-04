@@ -299,9 +299,17 @@ these, on either database, has found a change made since.
 | `trg` | `087000700dea24395739dab7f52f3ef0` | 6543 |
 | `typ` | `a713741449e51c3fa3d8d84849289f5a` | 6467 |
 
-**A migration applied to both databases moves the baseline**, so it has to be
-re-recorded after each one. That is the cost of having it, and it is the reason
-to record it here rather than to expect anyone to remember eight numbers.
+**A migration applied to both databases moves the baseline, and the migration
+that moved it updates this table in its own pull request.** Not later, and not
+by whoever next runs the queries. The order is the one already in use: apply on
+staging, apply on production, re-run the eight queries, update the affected
+rows here, commit the migration and the new baseline together.
+
+That makes the baseline part of review rather than a chore after it. A reviewer
+can see which fingerprints a migration claims to move and check that against
+what it does, and — the point of the whole thing — **a mismatch found later
+always means a change nobody intended**, because every intended one arrived
+with its own update.
 
 Two things it does not prove, so that a row of matching hashes is not read as
 more than it is: `col` cannot see `numeric` precision, so `numeric(4,2)` and a
@@ -454,28 +462,33 @@ somewhere nobody is looking. Scanned on 4 November across `CHECK` constraints,
 column defaults and generated columns, and index expressions and predicates,
 the whole category is three:
 
-| | Where it is called from | `PUBLIC`? |
-|---|---|---|
-| `is_e164` | `CHECK` on `contact_phones`, `directory_entries`, `phone_numbers`, `routing_schedules`, `users` | yes |
-| `location_type_is_service` | `CHECK` on `rubrics` and `benchmark_snapshots`; the generated column `locations.is_service_location` | yes |
-| `submitted_text` | the defaults for `schema_migrations.ran_md5` and `ran_len` | **no** |
+| | Where it is called from | Who writes those tables | `PUBLIC`? |
+|---|---|---|---|
+| `is_e164` | `CHECK` on `contact_phones`, `directory_entries`, `phone_numbers`, `routing_schedules`, `users` | `authenticated`, on all five | yes |
+| `location_type_is_service` | `CHECK` on `rubrics` and `benchmark_snapshots`; the generated column `locations.is_service_location` | `authenticated` on `rubrics` and `locations`; the owner only on `benchmark_snapshots` | yes |
+| `submitted_text` | the defaults for `schema_migrations.ran_md5` and `ran_len` | the owner only, through `record_migration` | **no** |
 
-**`submitted_text` is what makes the category precise.** It is in the same
-position as the other two and is correctly not public, because the only thing
-that writes `schema_migrations` is `record_migration`, a `SECURITY DEFINER`
-function running as `postgres`. So the category is *the system calls this
-during a write* — whether a member needs `PUBLIC` depends on who writes the
-table it guards, and that is a question to answer per function.
+**The third column is the one that answers a new member.** Read along a row:
+the function has to be executable by whoever writes those tables. Where that is
+the owner, nothing is needed — the owner can execute anything it owns, which is
+why `submitted_text` is correctly not public and why `benchmark_snapshots`
+contributes no requirement. Where it is `authenticated`, a grant is needed, and
+`authenticated` already holds a **direct** `EXECUTE` on both public members.
 
-`is_e164` would keep `PUBLIC` regardless, for the reason in `20261030T1500` §1:
-it is the single statement of the E.164 pattern, public so that nothing has an
-excuse to write a second one. `location_type_is_service` is kept on the trade
-rather than the risk — it is a pure predicate over an enum, so revoking it
-would buy nothing, while being wrong about it would break writes to three
-tables. **An action with no benefit and a non-zero cost is one not to take.**
+So neither `PUBLIC` grant is load-bearing. **Both are kept by choice, not by
+need**, and the choices are different:
 
-When a scan turns up a new member, spare it and decide deliberately; do not
-sweep it and find out.
+- `is_e164` for the reason in `20261030T1500` §1 — it is the single statement
+  of the E.164 pattern, public so that nothing has an excuse to write a second
+  one.
+- `location_type_is_service` on the trade. It is a pure predicate over an enum
+  and exposes nothing, so revoking it buys nothing; and while the direct
+  `authenticated` grant means revoking it would almost certainly be harmless,
+  **an action with no benefit and a non-zero cost is one not to take.** The
+  "almost" is carrying less weight here than the "nothing".
+
+When a scan turns up a new member, spare it, fill in its row, and decide from
+the third column. Do not sweep it and find out.
 
 ## Order
 
