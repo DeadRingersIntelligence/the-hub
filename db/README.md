@@ -759,6 +759,12 @@ decisions that belong to whoever has a consumer in front of them, and a helper
 with invented answers to them would look more authoritative than it is. What
 is worth having in advance is this paragraph.
 
+**When the first consumer settles those two questions, write the answers here,
+beside the questions, with the reason.** An answer that lives only in the
+migration that needed it is an answer the second consumer will reach on its
+own, possibly differently — which is the two-places problem again, arriving
+later and harder to see.
+
 **When that check is written, decide whether `partners_read` calls it, and
 record the answer here.** Calling it a half-pattern guards against copying it;
 it does not guard against the opposite, which is a second check landing beside
