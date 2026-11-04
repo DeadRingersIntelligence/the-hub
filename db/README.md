@@ -759,6 +759,15 @@ decisions that belong to whoever has a consumer in front of them, and a helper
 with invented answers to them would look more authoritative than it is. What
 is worth having in advance is this paragraph.
 
+**When that check is written, decide whether `partners_read` calls it, and
+record the answer here.** Calling it a half-pattern guards against copying it;
+it does not guard against the opposite, which is a second check landing beside
+the first and the two drifting apart because nobody compared them. That is how
+this schema ended up stating the E.164 pattern in several places, and it took
+four migrations to get back to one. Two checks is the right answer if partner
+access and data-sharing agreements genuinely have separate lifecycles — but
+then say so, in a sentence, at the moment the second one exists.
+
 ## SECURITY DEFINER functions
 
 A definer function runs as its owner, so it bypasses RLS entirely. Two things
