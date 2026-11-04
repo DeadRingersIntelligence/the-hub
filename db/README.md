@@ -19,7 +19,7 @@ table already exists. That is intended — a migration is a one-time change.
 
 Paste into the Supabase SQL Editor, one file per query, in order.
 
-### Three things that will happen
+### Four things that will happen
 
 **Supabase's row-level-security warning fires on data-only files.** Its scanner
 reads the word "their" inside a rubric question as a table name and warns about
@@ -28,6 +28,13 @@ without RLS" is correct. If it does contain `CREATE TABLE`, read it first.
 
 **The editor rejects files over roughly 1 MB.** That is why migration 013 is
 split into six parts. Run them in letter order.
+
+**The editor does not show `RAISE NOTICE`.** Anything a migration reports
+that way — a precondition saying what it is about to change, a sweep saying
+what it spared — is invisible when the file is run there. Put anything a reader
+must see into the verification block, whose text comes back through a
+`RAISE EXCEPTION` and therefore does appear. The notices are still worth
+writing, for `psql` and for the logs; just never rely on one being read.
 
 **The editor rewrites what you submit**, in two ways that matter. It appends a
 trailer to every submission — a `-- source: dashboard` line, a session id and a

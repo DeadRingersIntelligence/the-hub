@@ -2,6 +2,42 @@
 -- 20261104T0900_public_loses_execute.sql
 -- The Hub — the last thing the anonymous key can reach.
 --
+-- APPLIED ON STAGING AND PRODUCTION, 2026-11-04, block md5
+-- 8a62534f67450a0da1a7c44a718d83a0, identical on both. is_e164 and
+-- location_type_is_service are the only functions still granting PUBLIC; the
+-- canary is 3; service_role reaches five routines.
+--
+-- THE acl COMPARISON NOW MATCHES IN FULL, for the first time:
+-- ffefc02753d113a5fe6c5c47e50ca505 on both databases. Every grant on every
+-- relation, sequence and routine in public agrees. 20261103T2100's two
+-- predicted differences were the last of them.
+--
+-- CORRECTIONS MADE IN PLACE, all outside the transaction. The body is
+-- untouched and its md5 is unchanged.
+--
+--   THE TRIGGER PROBE PROVED NOTHING, again. All 33 trigger functions also
+--   hold a DIRECT authenticated grant from 024's function default, so after
+--   the sweep authenticated can still call touch_updated_at by name and the
+--   probe printed true whatever had happened. It now revokes that grant too,
+--   inside the rolled-back block, which is how the 3 November experiment was
+--   run. Second time in two files that a probe ran under privileges that made
+--   its own question unaskable.
+--
+--   "functions authenticated can EXECUTE" DOES NOT DROP, for the same reason:
+--   it stays at 107 on staging. The old expectation said the 33 would fall off
+--   it. The header's claim that they "lose PUBLIC with nothing granted back"
+--   is still true — they simply had a second grant all along.
+--
+--   anon CAN REACH TWO FUNCTIONS, not one. Said in three places and wrong in
+--   all three before this pass.
+--
+--   SECTION 1'S COMMENT STILL SAYS "written to refuse with a list rather than
+--   to proceed with a count", which stopped being the whole truth when the
+--   integrity scan changed from refusing to sparing. It is inside the
+--   transaction and this file has run, so it stays as it is: an applied
+--   migration is annotated, never amended. It refuses on orphans and spares
+--   the integrity set, and the paragraph below it says so.
+--
 -- WHAT IS WRONG. 68 functions in public grant EXECUTE to PUBLIC, and PUBLIC is
 -- every role: anon included. The anonymous key ships in every hellophone
 -- bundle and every preview build, so anyone who opens the site can call all
@@ -88,10 +124,16 @@
 -- webhook off; that is corrected in that file's header and repeated here
 -- because this is the file where the mistake would have landed.
 --
--- WHAT IS LEFT AFTERWARDS. anon can execute exactly one function in public:
--- is_e164. It holds nothing else anywhere — no table, no sequence, no routine.
+-- WHAT IS LEFT AFTERWARDS. anon can execute exactly two functions in public:
+-- is_e164 and location_type_is_service, both kept on purpose and neither able
+-- to reveal anything about a firm. It holds nothing else anywhere — no table,
+-- no sequence, no other routine.
 -- btree_gist's 188 supabase_admin-owned functions still grant it EXECUTE and
 -- are still out of postgres's reach; none of them reads application data.
+--
+-- NOTICES ARE INVISIBLE IN THE SQL EDITOR, so section 1's "keeping PUBLIC on"
+-- line is never seen there. The verification's "which is:" line is what
+-- actually shows the list, and it is the one to read.
 --
 -- Requires: 024, 20261103T1600, 20261103T1200 (record_migration).
 -- Safe to run twice: the sweep targets functions that still hold a PUBLIC
@@ -343,8 +385,11 @@ COMMIT;
 --                                  WHERE d.classid = 'pg_proc'::regclass
 --                                    AND d.objid = p.oid AND d.deptype = 'e')
 --                 AND has_function_privilege('authenticated', p.oid, 'EXECUTE'))
---          || '   (compare with the number before this ran. The 33 trigger '
---          || 'functions SHOULD drop off it; nothing the app calls should)' || chr(10);
+--          || '   (expect NO CHANGE from before this ran — 107 on staging. '
+--          || 'An earlier version of this line predicted the 33 trigger '
+--          || 'functions would drop off; they do not, because 024''s function '
+--          || 'default gave every one of them a direct authenticated grant as '
+--          || 'well as PUBLIC. Nothing should drop off)' || chr(10);
 --   r := r || '    the three the logs showed in use: '
 --          || (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
 --               WHERE n.nspname = 'public'
@@ -359,15 +404,27 @@ COMMIT;
 --     FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
 --   INSERT INTO zzz_public_probe (id) VALUES (1);
 --   GRANT SELECT, UPDATE ON zzz_public_probe TO authenticated;
+--
+--   -- Revoking PUBLIC is not enough to test this, and the first version of
+--   -- this block assumed it was. All 33 trigger functions ALSO hold a direct
+--   -- authenticated grant from 024's function default, so after the sweep
+--   -- authenticated can still call touch_updated_at by name and the test
+--   -- proved nothing — the same tautology as 20261103T2300's first probe.
+--   -- Taking the direct grant away too, inside this rolled-back block, is
+--   -- what the 3 November experiment did and what makes the next line mean
+--   -- something.
+--   REVOKE EXECUTE ON FUNCTION touch_updated_at() FROM authenticated;
 --   r := r || 'authenticated can call touch_updated_at by name: '
 --          || has_function_privilege('authenticated', 'public.touch_updated_at()', 'EXECUTE')::text
---          || '   (expect false now)' || chr(10);
+--          || '   (expect false — PUBLIC gone from the sweep, the direct grant '
+--          || 'gone from the line above, and both undone by the rollback)' || chr(10);
 --   PERFORM set_config('role', 'authenticated', true);
 --   UPDATE zzz_public_probe SET id = 1;
 --   PERFORM set_config('role', 'none', true);
 --   r := r || '    and its trigger still fires: '
 --          || (SELECT (updated_at IS NOT NULL)::text FROM zzz_public_probe WHERE id = 1)
---          || '   (expect true — the 33 need no grant)' || chr(10);
+--          || '   (expect true — the 33 need no grant, which is now shown '
+--          || 'rather than asserted)' || chr(10);
 --   DROP TABLE zzz_public_probe;
 --
 --   -- ---- as anon. Last: the role does not need to revert after this. -------
@@ -376,7 +433,7 @@ COMMIT;
 --   BEGIN
 --     PERFORM is_e164('+15555550123');
 --     r := r || 'anon can still call is_e164: yes — correct, and the proof '
---            || 'this file left its one exception alone' || chr(10);
+--            || 'this file left its two exceptions alone' || chr(10);
 --   EXCEPTION WHEN others THEN
 --     r := r || 'anon could NOT call is_e164 (BAD): ' || SQLERRM || chr(10); END;
 --
