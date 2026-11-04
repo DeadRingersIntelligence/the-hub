@@ -581,11 +581,13 @@ signed-in user at every firm on production for a month. Nobody granted that.
 The old default granted it, and a policy written `FOR ALL` because its author
 left the `FOR` clause off let it through. Two defaults, neither examined.
 
-**Two things this does not cover.** Existing tables keep every grant they have,
-all 91 of them, including `INSERT`, `UPDATE` and `DELETE` for `authenticated`;
-default privileges apply at `CREATE` time and never retroactively. What stands
-between that and 91 more copies of finding 0 is the policies, so a policy
-written `FOR ALL` is still the thing to catch in review. And a table created
+**Two things this does not cover.** Existing tables keep every grant they
+have: `authenticated` can still write **85 of the 98 relations** in `public`,
+because default privileges apply at `CREATE` time and never retroactively. (It
+was 91 until `20261103T1000` took the writes off the six reference tables.)
+What stands between that and 85 more copies of finding 0 is the policies, so a
+policy written `FOR ALL` is still the thing to catch in review — and on
+4 November all 85 were checked: every one is scoped, and none has RLS off. And a table created
 through the **Supabase UI** is created by `supabase_admin`, follows that role's
 defaults rather than `postgres`'s, and arrives writable by everyone signed in —
 `ALTER DEFAULT PRIVILEGES` is per granting role and `postgres` is not a member
