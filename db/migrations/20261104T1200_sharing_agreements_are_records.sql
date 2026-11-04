@@ -3,6 +3,28 @@
 -- The Hub — a signed agreement is a record of something that happened, not
 -- a row either party can edit.
 --
+-- APPLIED ON STAGING AND PRODUCTION, 2026-11-04, block md5
+-- 93333e55c4debc7d96391ce8333bf096.
+--
+-- THE HOLE WAS MEASURED BEFORE IT WAS CLOSED, which is the part worth keeping.
+-- On staging, with a real agreement between two firms and a user scoped only
+-- to the RECEIVING firm, impersonated through the JWT claim and with the table
+-- grants handed back:
+--
+--   under 002's policy   read 1, UPDATE 1 row, DELETE 1 row
+--   after this file      read 1, UPDATE 0 rows, DELETE 0 rows
+--
+-- The receiving party could rewrite the scope it had been granted and delete
+-- the agreement. Not inferred from the policy text — done.
+--
+-- THE VERIFICATION'S FIRST WRITE PROBE COULD NOT FAIL and is replaced in place
+-- with that fixture; the body is untouched. It ran against an empty table with
+-- no signed-in user, so "0 rows" was the answer whatever the policy said — it
+-- would have printed the same under 002. Fourth such check in a day, and the
+-- common shape is now clear enough to name: a test that exercises a permission
+-- must first arrange for the thing to be permitted, or it is measuring the
+-- absence of data instead of the presence of a rule.
+--
 -- WHAT IS WRONG. data_sharing_agreements carries one policy:
 --
 --   CREATE POLICY data_sharing_agreements_tenant ON data_sharing_agreements
@@ -191,7 +213,9 @@ COMMIT;
 -- Verification — one block, everything rolled back by the closing RAISE.
 --
 -- DO $$
--- DECLARE r text := ''; n int; v_qual text; v_org uuid;
+-- DECLARE
+--   r text := ''; n int; v_qual text;
+--   v_a uuid; v_b uuid; v_dsa uuid; v_user uuid; v_auth uuid := gen_random_uuid();
 -- BEGIN
 --   r := r || 'policies on the table:' || chr(10) || '    '
 --          || COALESCE((SELECT string_agg(polname || '(' || polcmd::text || ')', ', ' ORDER BY polname)
@@ -219,42 +243,65 @@ COMMIT;
 --          || has_table_privilege('anon', 'public.data_sharing_agreements', 'SELECT')::text
 --          || '   (expect false)' || chr(10);
 --
---   -- postgres writes regardless, which is what keeps future migrations working.
---   SELECT count(*) INTO n FROM data_sharing_agreements;
---   r := r || 'rows the owner can see: ' || n || '   (expect all of them)' || chr(10);
+--   -- ---- the fixture -------------------------------------------------------
+--   -- An empty table and no signed-in user is a test that passes whatever the
+--   -- policy says, which is what the first version of this block did. Below is
+--   -- a real agreement between two firms and a real user scoped to the
+--   -- RECEIVING one — the party 002's policy let edit and delete.
+--   --
+--   -- app.is_internal is on only while the rows are created, because
+--   -- users_guard_privileged refuses a new user who already has an
+--   -- auth_user_id. It goes off again before anything is tested.
+--   PERFORM set_config('app.is_internal', 'on', true);
 --
---   -- THE SECOND LOCK. Hand the privilege back — the stray GRANT this is meant
---   -- to survive — and the write must still fail, because no policy admits it.
---   -- Unlike a missing grant, which raises, a refusing policy returns 0 rows.
---   GRANT UPDATE ON data_sharing_agreements TO authenticated;
+--   SELECT id INTO v_a FROM organizations ORDER BY created_at LIMIT 1;
+--   SELECT id INTO v_b FROM organizations WHERE id <> v_a ORDER BY created_at LIMIT 1;
 --
---   -- ---- as a signed-in user. Last: the role does not revert. --------------
---   PERFORM set_config('role', 'authenticated', true);
+--   IF v_b IS NULL THEN
+--     r := r || 'fewer than two organizations — FIXTURE NOT RUN, and the two '
+--            || 'lines that matter are untested' || chr(10);
+--   ELSE
+--     INSERT INTO data_sharing_agreements
+--            (organization_id, receiving_org_id, scope, signed_on, signed_by)
+--     VALUES (v_a, v_b, 'all', current_date, 'ZZZ verification')
+--     RETURNING id INTO v_dsa;
 --
---   BEGIN
---     SELECT count(*) INTO n FROM data_sharing_agreements;
---     r := r || 'authenticated can read: ' || n || ' rows   (expect 0 with no '
---            || 'app.user_id set — the policy is scoped, and this only shows '
---            || 'the read path is not refused outright)' || chr(10);
---   EXCEPTION WHEN others THEN
---     r := r || 'authenticated read REFUSED (BAD): ' || SQLERRM || chr(10); END;
+--     INSERT INTO users (email, full_name, auth_user_id)
+--     VALUES ('zzz-verify@example.invalid', 'ZZZ Verification', v_auth)
+--     RETURNING id INTO v_user;
 --
---   BEGIN
---     UPDATE data_sharing_agreements SET notes = notes WHERE true;
+--     INSERT INTO user_scopes (user_id, scope_type, view_profile, organization_id)
+--     VALUES (v_user, 'organization', 'manager', v_b);
+--
+--     PERFORM set_config('app.is_internal', 'off', true);
+--
+--     -- Hand the privileges back: the stray GRANT this file's second lock is
+--     -- meant to survive.
+--     GRANT UPDATE, DELETE ON data_sharing_agreements TO authenticated;
+--
+--     -- Become that user the way a request does — through the JWT claim that
+--     -- auth.uid() reads, not by setting app.user_id, which no client can set
+--     -- and which would prove something easier than the real path.
+--     PERFORM set_config('request.jwt.claims',
+--                        json_build_object('sub', v_auth::text)::text, true);
+--     PERFORM set_config('role', 'authenticated', true);
+--
+--     SELECT count(*) INTO n FROM data_sharing_agreements WHERE id = v_dsa;
+--     r := r || 'the receiving firm can still READ its agreement: ' || n
+--            || '   (expect 1 — this must not have changed)' || chr(10);
+--
+--     UPDATE data_sharing_agreements SET scope = 'reports' WHERE id = v_dsa;
 --     GET DIAGNOSTICS n = ROW_COUNT;
---     r := r || 'authenticated update WITH the grant restored: ' || n || ' rows'
---            || '   (expect 0 — no write policy exists, so the grant alone '
---            || 'permits nothing. This is the lock that survives a future '
---            || 'stray GRANT)' || chr(10);
---   EXCEPTION WHEN others THEN
---     r := r || 'authenticated update raised instead of returning 0: ' || SQLERRM
---            || '   (acceptable, but it means the grant did not restore)' || chr(10); END;
+--     r := r || 'the receiving firm can UPDATE it: ' || n || ' rows'
+--            || '   (expect 0. Under 002''s FOR ALL policy this was 1, measured '
+--            || 'on staging before this file ran — the receiving party could '
+--            || 'rewrite the scope it had been granted)' || chr(10);
 --
---   BEGIN
---     DELETE FROM data_sharing_agreements WHERE false;
---     r := r || 'authenticated delete: ALLOWED (BAD)' || chr(10);
---   EXCEPTION WHEN others THEN
---     r := r || 'authenticated delete refused: ' || SQLERRM || chr(10); END;
+--     DELETE FROM data_sharing_agreements WHERE id = v_dsa;
+--     GET DIAGNOSTICS n = ROW_COUNT;
+--     r := r || 'the receiving firm can DELETE it: ' || n || ' rows'
+--            || '   (expect 0. Under 002''s policy this was 1)' || chr(10);
+--   END IF;
 --
 --   RAISE EXCEPTION 'VERIFY 20261104T1200_sharing_agreements_are_records (all rolled back) %',
 --                   chr(10) || r;
