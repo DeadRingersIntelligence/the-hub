@@ -2,6 +2,42 @@
 -- 20261104T1300_firms_read_their_own_record.sql
 -- The Hub — a firm can see its own record. Only Dead Ringers changes it.
 --
+-- APPLIED ON STAGING AND PRODUCTION, 2026-11-04, block md5
+-- beafbc6d7d0c8e4525ce166ea0121be8.
+--
+-- MEASURED ON STAGING, with a user scoped to one firm, signed in as
+-- authenticated, all rolled back:
+--
+--                                    before        after
+--   read their firm                    1             1
+--   rename their firm                  1 row         0
+--   delete their firm                  allowed *     0
+--   internal staff update              1             1
+--
+--   * the DELETE was permitted by the policy and stopped by a foreign key,
+--     locations_organization_id_fkey. The comment in the verification saying
+--     so was right, and it is the difference between a firm being unable to
+--     delete itself and a firm being unable to delete itself YET.
+--
+-- THREE THINGS ADDED TO THE VERIFICATION AFTERWARDS, in place; the body is
+-- untouched.
+--
+--   IT NEVER TESTED THAT STAFF CAN STILL WRITE. As written it would have
+--   passed just as happily if the write policy blocked Dead Ringers as well,
+--   which is the failure this ruling sits one careless expression away from. A
+--   policy that denies everyone looks exactly like a policy that works, from
+--   the outside. There is now a positive line for each table.
+--
+--   IT NEVER TESTED partners AT ALL — half the file, and the deeper of the two
+--   expressions. Production has no partner rows, so the fixture now creates
+--   one along with the partner_access row that makes it visible, which is the
+--   same row that under 003's FOR ALL policy let a firm rewrite the
+--   consultancy's record.
+--
+--   ONE COMMENT DID NOT PARSE. Replaced with what it was trying to say: every
+--   write test runs as a client role, because postgres holds BYPASSRLS and no
+--   policy is evaluated for it.
+--
 -- WHAT IS WRONG. Two policies, both written as reads and both doing write duty:
 --
 --   CREATE POLICY organizations_tenant ON organizations
@@ -206,6 +242,7 @@ COMMIT;
 -- DECLARE
 --   r text := ''; n int;
 --   v_org uuid; v_user uuid; v_auth uuid := gen_random_uuid(); v_name text;
+--   v_partner uuid;
 -- BEGIN
 --   r := r || 'policies now:' || chr(10);
 --   r := r || COALESCE((
@@ -248,8 +285,9 @@ COMMIT;
 --     VALUES (v_user, 'organization', 'manager', v_org);
 --     PERFORM set_config('app.is_internal', 'off', true);
 --
---     -- Internal first, while still the owner is irrelevant: postgres bypasses
---     -- RLS, so the only honest test of the write policy is as a client role.
+--     -- Everything below runs as a client role. Testing the write policy as
+--     -- postgres would prove nothing: it holds BYPASSRLS, so no policy is
+--     -- evaluated for it at all.
 --     PERFORM set_config('request.jwt.claims',
 --                        json_build_object('sub', v_auth::text)::text, true);
 --     PERFORM set_config('role', 'authenticated', true);
@@ -273,6 +311,50 @@ COMMIT;
 --     r := r || 'the name is unchanged: '
 --            || (SELECT (name = v_name)::text FROM organizations WHERE id = v_org)
 --            || '   (expect true)' || chr(10);
+--
+--     -- THE POSITIVE HALF. Without this the block would pass just as happily
+--     -- if the write policy blocked Dead Ringers too, which is the failure
+--     -- this ruling is one careless expression away from. Still authenticated
+--     -- — internal staff have no role of their own — with app.is_internal on.
+--     PERFORM set_config('app.is_internal', 'on', true);
+--     UPDATE organizations SET name = name WHERE id = v_org;
+--     GET DIAGNOSTICS n = ROW_COUNT;
+--     r := r || 'INTERNAL staff can still rename it: ' || n || ' rows'
+--            || '   (expect 1 — the grants stay for exactly this reason)' || chr(10);
+--     PERFORM set_config('app.is_internal', 'off', true);
+--
+--     -- ---- partners, which production has none of ---------------------------
+--     -- A fixture rather than a skip: the policy this file installs on
+--     -- partners is otherwise entirely untested, and 003's is the deeper of
+--     -- the two expressions. The firm gets partner_access, which is what the
+--     -- read policy turns on, and which under FOR ALL also let it write.
+--     PERFORM set_config('role', 'none', true);
+--     PERFORM set_config('app.is_internal', 'on', true);
+--     INSERT INTO partners (name, partner_type)
+--     VALUES ('ZZZ Verification Partners', 'consultancy')
+--     RETURNING id INTO v_partner;
+--     INSERT INTO partner_access (partner_id, organization_id)
+--     VALUES (v_partner, v_org);
+--     PERFORM set_config('app.is_internal', 'off', true);
+--     PERFORM set_config('role', 'authenticated', true);
+--
+--     SELECT count(*) INTO n FROM partners WHERE id = v_partner;
+--     r := r || 'the firm can READ the partner that can reach its data: ' || n
+--            || '   (expect 1 — 003''s whole purpose, and it must not move)' || chr(10);
+--
+--     UPDATE partners SET name = 'ZZZ renamed partner' WHERE id = v_partner;
+--     GET DIAGNOSTICS n = ROW_COUNT;
+--     r := r || 'the firm can RENAME that partner: ' || n || ' rows'
+--            || '   (expect 0. Under 003''s FOR ALL policy this was 1: holding '
+--            || 'partner_access let a firm rewrite the consultancy''s record)'
+--            || chr(10);
+--
+--     PERFORM set_config('app.is_internal', 'on', true);
+--     UPDATE partners SET name = name WHERE id = v_partner;
+--     GET DIAGNOSTICS n = ROW_COUNT;
+--     r := r || 'INTERNAL staff can still rename the partner: ' || n || ' rows'
+--            || '   (expect 1)' || chr(10);
+--     PERFORM set_config('app.is_internal', 'off', true);
 --   END IF;
 --
 --   RAISE EXCEPTION 'VERIFY 20261104T1300_firms_read_their_own_record (all rolled back) %',
