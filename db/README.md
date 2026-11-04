@@ -282,6 +282,31 @@ be read as a constant rather than a finding.
 comment is where this schema records why a column exists — but the only one of
 the gaps that cannot mislead anybody about access.
 
+### The baseline, 4 November 2026
+
+All eight ran identically on staging and production on 4 November 2026, for the
+first time. This is the state to diff against: a later run that differs from
+these, on either database, has found a change made since.
+
+| query | md5 | characters |
+|---|---|---|
+| `acl` | `ffefc02753d113a5fe6c5c47e50ca505` | 43350 |
+| `col` | `adffe4348d154de655c6e6d734d9599f` | 68914 |
+| `con` | `ced2d050bcded68c18cf2e6e770a9d2b` | 50386 |
+| `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
+| `fn` | `94a58f9bdfb77e2090139869be6d4fc9` | 10689 |
+| `mig` | `0d65750186f172bc535c50d7a0c363f1` | 15695 |
+| `trg` | `087000700dea24395739dab7f52f3ef0` | 6543 |
+| `typ` | `a713741449e51c3fa3d8d84849289f5a` | 6467 |
+
+**A migration applied to both databases moves the baseline**, so it has to be
+re-recorded after each one. That is the cost of having it, and it is the reason
+to record it here rather than to expect anyone to remember eight numbers.
+
+Two things it does not prove, so that a row of matching hashes is not read as
+more than it is: `col` cannot see `numeric` precision, so `numeric(4,2)` and a
+bare `numeric` compare equal; and nothing here covers column comments.
+
 ## Is anything still arriving
 
 The structural diff asks whether the schema has moved. This asks the other
@@ -388,9 +413,8 @@ check worth writing into every verification block, as they have been since
   includes some paths through the Supabase dashboard — follows those defaults
   and arrives wide open.
 - **A default is not retroactive.** It decides what a new object gets and says
-  nothing about the 98 relations already there, or the 114 functions on
-  production and 112 on staging — that difference is `014`, which has never
-  run on staging.
+  nothing about the 98 relations and 114 functions already there. (Staging had
+  112 until `20261103T2100` gave it `014`'s two.)
 
 So every new function still gets the explicit pair, on both databases:
 `REVOKE ALL … FROM PUBLIC, anon;` then `GRANT EXECUTE … TO authenticated;` —
@@ -398,28 +422,60 @@ see **SECURITY DEFINER functions** below. The revoke is no longer compensating
 for a difference between the databases; it is stating the intent in the file,
 where a reviewer can see it.
 
-One thing remains: `anon` can still `EXECUTE` 68 of our own functions **through
-`PUBLIC`**. `PUBLIC` is a separate grant held by every role, so the trap to
-remember is that *revoking a role's own grant does not take away what it holds
-through `PUBLIC`* — an `anon`-only sweep on production would have changed
-nothing and been reported as a fix.
+**`PUBLIC` was the last of it, and `20261104T0900` swept it.** 68 of our own
+functions granted `EXECUTE` to `PUBLIC`, which is a grant held by every role —
+so the trap worth remembering is that *revoking a role's own grant does not take
+away what it holds through `PUBLIC`*. An `anon`-only sweep on production would
+have changed nothing and been reported as a fix.
 
-Those 68 can be swept in one statement rather than decided one at a time, for
-two reasons both established by measurement on 3 November:
+It went as one statement rather than 68 decisions, for two reasons both
+measured first:
 
-- **`authenticated` already holds a direct `EXECUTE` on all 68 on production.**
-  Each has the ACL `{=X/postgres, postgres=X/postgres, authenticated=X/postgres}`.
-  Revoking `PUBLIC` leaves signed-in callers working. An earlier draft of this
-  section asserted the opposite — that `PUBLIC` was the only grant they had —
-  and would have built the next migration on it.
+- **`authenticated` already held a direct `EXECUTE` on all 68 on production.**
+  Each had the ACL `{=X/postgres, postgres=X/postgres, authenticated=X/postgres}`.
+  Revoking `PUBLIC` left every signed-in caller working. An earlier draft of
+  this section asserted the opposite — that `PUBLIC` was the only grant they
+  had — and would have built the next migration on it.
 - **A trigger function does not need `EXECUTE` at all.** PostgreSQL checks that
   privilege at `CREATE TRIGGER`, not when the trigger fires. Proved on staging:
-  with `EXECUTE` revoked from `PUBLIC`, `anon` and `authenticated`, an `UPDATE`
+  with `EXECUTE` revoked from `PUBLIC` *and from `authenticated`*, an `UPDATE`
   run as `authenticated` still fired `touch_updated_at()` and still set
-  `updated_at`. That covers 33 of the 68.
+  `updated_at`. That covered 33 of the 68. Revoking only `PUBLIC` proves
+  nothing here, because 024's function default gave all 33 a direct grant too.
 
-`is_e164` is the one deliberate exception and keeps `PUBLIC`, for the reason in
-`20261030T1500` §1.
+**`anon` can now execute two of our functions, and they are the two the system
+calls during a write.**
+
+### Functions the system calls during a write
+
+These keep `PUBLIC` where the writing role needs it, because a privilege
+failure in one of them arrives as a refused write rather than a refused call —
+somewhere nobody is looking. Scanned on 4 November across `CHECK` constraints,
+column defaults and generated columns, and index expressions and predicates,
+the whole category is three:
+
+| | Where it is called from | `PUBLIC`? |
+|---|---|---|
+| `is_e164` | `CHECK` on `contact_phones`, `directory_entries`, `phone_numbers`, `routing_schedules`, `users` | yes |
+| `location_type_is_service` | `CHECK` on `rubrics` and `benchmark_snapshots`; the generated column `locations.is_service_location` | yes |
+| `submitted_text` | the defaults for `schema_migrations.ran_md5` and `ran_len` | **no** |
+
+**`submitted_text` is what makes the category precise.** It is in the same
+position as the other two and is correctly not public, because the only thing
+that writes `schema_migrations` is `record_migration`, a `SECURITY DEFINER`
+function running as `postgres`. So the category is *the system calls this
+during a write* — whether a member needs `PUBLIC` depends on who writes the
+table it guards, and that is a question to answer per function.
+
+`is_e164` would keep `PUBLIC` regardless, for the reason in `20261030T1500` §1:
+it is the single statement of the E.164 pattern, public so that nothing has an
+excuse to write a second one. `location_type_is_service` is kept on the trade
+rather than the risk — it is a pure predicate over an enum, so revoking it
+would buy nothing, while being wrong about it would break writes to three
+tables. **An action with no benefit and a non-zero cost is one not to take.**
+
+When a scan turns up a new member, spare it and decide deliberately; do not
+sweep it and find out.
 
 ## Order
 
