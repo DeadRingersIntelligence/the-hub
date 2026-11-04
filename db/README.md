@@ -294,7 +294,7 @@ these, on either database, has found a change made since.
 | `col` | `adffe4348d154de655c6e6d734d9599f` | 68914 |
 | `con` | `ced2d050bcded68c18cf2e6e770a9d2b` | 50386 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `94a58f9bdfb77e2090139869be6d4fc9` | 10689 |
+| `fn` | `99d7b13a6e311ac9d2f7e4cd50b172b0` | 10689 |
 | `mig` | `0d65750186f172bc535c50d7a0c363f1` | 15695 |
 | `trg` | `087000700dea24395739dab7f52f3ef0` | 6543 |
 | `typ` | `a713741449e51c3fa3d8d84849289f5a` | 6467 |
@@ -592,6 +592,66 @@ through the **Supabase UI** is created by `supabase_admin`, follows that role's
 defaults rather than `postgres`'s, and arrives writable by everyone signed in —
 `ALTER DEFAULT PRIVILEGES` is per granting role and `postgres` is not a member
 of `supabase_admin`. The structural diff is what would catch one.
+
+## What every policy rests on
+
+Every tenant policy in this schema resolves to `is_internal()` or
+`current_organization_id()` or `current_user_id()`, and all three read session
+settings: `app.is_internal`, `app.organization_id`, `app.user_id`. **If an API
+caller could set any of those, every policy in `public` would be decoration.**
+That is the single assumption the whole access-control design depends on, and
+it was nowhere in writing until 4 November. Checked then, on production:
+
+- No function of ours sets `app.is_internal` or `app.user_id`. The only
+  `set_config` on `app.organization_id` is inside `set_active_organization`,
+  which checks `user_scopes` first and, since `20261104T1100`, writes
+  transaction-locally.
+- Neither `authenticated` nor `anon` can `CREATE` in `public`,
+  `graphql_public`, `extensions` or `storage`, so neither can define a function
+  that would set one.
+- No role default (`ALTER ROLE … SET`) sets anything under `app.`.
+- PostgREST sets only `request.*`, never `app.*`.
+
+**Re-check this when any of those four change** — a new schema a client role can
+write to, a role default, or a PostgREST upgrade that changes what it sets. It
+is cheap to check and silent when it breaks.
+
+### The write policies, read rather than counted
+
+On 4 November all 112 permissive write policies (`ALL`, `INSERT`, `UPDATE`,
+`DELETE`, for `authenticated` or `public`) on the 85 tables `authenticated` can
+write were listed and read, grouped into 28 shapes. **None is unscoped**, and
+no writable table lacks a write policy. Fifty are the plain
+`is_internal() OR organization_id = current_organization_id()`; the rest reach
+the firm through a parent — `evaluations`, `interactions`, `rubrics`, `shops`,
+`teams`, `threads`, `cases` — or are `user_id = current_user_id()`, and the
+settings tables add `can_manage_settings()`.
+
+```sql
+with w as (select distinct c.relname from pg_class c join pg_namespace n on n.oid=c.relnamespace, aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a where n.nspname='public' and c.relkind in ('r','p') and a.grantee='authenticated'::regrole and a.privilege_type in ('INSERT','UPDATE','DELETE')), p as (select p.* from pg_policies p join w on w.relname=p.tablename where p.schemaname='public' and p.permissive='PERMISSIVE' and p.cmd in ('ALL','INSERT','UPDATE','DELETE') and ('authenticated'=any(p.roles) or 'public'=any(p.roles))) select tablename, policyname, cmd, qual, with_check from p where not (coalesce(qual,'')||' '||coalesce(with_check,'') ~ '(current_organization_id|is_internal|auth\.uid|current_view_profile|can_)') order by 1,2;
+```
+
+**It tests whether a scoping function is mentioned, not whether it scopes.**
+`is_internal() OR organization_id IS NOT NULL` would pass it. Reading the 28
+shapes is what actually covered that, and a zero here means "nothing obviously
+unscoped", not "nothing unscoped". Run it as a net after any migration that
+adds a write policy; read the shapes when the policy set changes materially.
+
+An earlier, weaker version looked for a policy whose `USING` or `CHECK` was
+literally `true` — the finding-0 pattern. That also returns zero, and it is the
+cheaper check to re-run; it just catches less.
+
+### `set_config` and the connection pool
+
+PostgREST runs each request in its own transaction on a **pooled** connection.
+A `set_config(..., false)` therefore outlives the request that made it and is
+still set for whoever gets that connection next. `20261104T1100` fixed one of
+these in `set_active_organization`; `027`'s own comment had described the
+correct behaviour while its code did the other thing.
+
+The question to ask of every `set_config` is not whether the value is right but
+**how long it is meant to last**, and on a pooled connection the answer is
+almost always the transaction.
 
 ## SECURITY DEFINER functions
 
