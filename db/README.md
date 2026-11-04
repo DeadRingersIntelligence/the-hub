@@ -710,6 +710,21 @@ verification originally checked only that a firm *could not* write its own
 record, and would have passed unchanged if the policy had locked out Dead
 Ringers as well.
 
+### Nobody can create an organization or a partner through the API
+
+`20261104T1300` put `INSERT` on both tables behind `is_internal()`, so a firm
+and its partner records are created by Dead Ringers or by a migration, never by
+a signed-in user. That follows from the ruling that only Dead Ringers writes
+those tables, and it is almost certainly right — firms are onboarded, not
+self-served.
+
+**It is written here because whoever builds onboarding will read the access
+rules and will not read a policy migration.** If self-serve sign-up is ever
+wanted, it needs a server-side path — a `SECURITY DEFINER` function that
+creates the organization after whatever checks sign-up requires — rather than
+a loosened policy. Loosening the policy would hand every signed-in user the
+ability to create firms.
+
 ### `revoked_on` does not revoke anything yet
 
 Nothing reads `data_sharing_agreements`. Checked on 4 November: no policy, no
@@ -726,6 +741,23 @@ So when something is eventually built that grants access *from* an agreement,
 it must check `revoked_on` **and** `covers_from` / `covers_to`. The columns
 exist, which makes it easy to assume they are being honoured — and easy to ship
 a reader that silently ignores both. Write that check first.
+
+**And they are two different questions, which is the mistake to expect.**
+`revoked_on` is about the *agreement*: whether it is still in force. The
+`covers_` dates are about the *data*: which period of it the agreement reaches,
+with `covers_from` null meaning all history. A reader that checks only one has
+a hole — an unrevoked agreement does not reach data outside its window, and an
+agreement revoked last year does not reach anything merely because the data
+predates the revocation. `partners_read` is the only working precedent and it
+checks the first kind and has no second kind to check, so it is a half-pattern
+to copy from.
+
+No function for this exists yet and none is being written in advance. The
+semantics a helper would have to fix — whether an agreement is in force *on*
+the day it was revoked, whether the `covers_` bounds are inclusive — are
+decisions that belong to whoever has a consumer in front of them, and a helper
+with invented answers to them would look more authoritative than it is. What
+is worth having in advance is this paragraph.
 
 ## SECURITY DEFINER functions
 
