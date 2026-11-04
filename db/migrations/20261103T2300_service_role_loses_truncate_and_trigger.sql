@@ -3,6 +3,23 @@
 -- The Hub — the server's key stops being able to empty a table or attach
 -- code to one.
 --
+-- APPLIED ON STAGING AND PRODUCTION, 2026-11-03, block md5
+-- d298c733cbcf8119a2b4a3f80d4c03f9, identical on both. service_role now holds
+-- MAINTAIN and REFERENCES on 95 relations and nothing else; the table default
+-- reads service_role=xm on both; the canary is 3.
+--
+-- THE TRIGGER PROBE IN THE VERIFICATION PROVED NOTHING, and is fixed in place
+-- below. It ran the UPDATE as postgres, which owns the probe table — an owner
+-- does not need TRIGGER, so the line printed true whether or not the revoke
+-- had happened. A net with no hole in it, which is worse than no net: it was
+-- the one line in the block that existed to answer the obvious worry about
+-- revoking something called TRIGGER, and it answered it with a tautology.
+--
+-- It now grants the probe to authenticated, switches into that role, updates,
+-- and switches back — which is how the staging experiment that established
+-- this behaviour was run in the first place. The body is untouched and its
+-- md5 is unchanged.
+--
 -- WHAT IT HOLDS. After 20261103T1800 aligned the two databases, service_role
 -- holds no SELECT, INSERT, UPDATE or DELETE anywhere in public, nothing on
 -- sequences, and EXECUTE on exactly three functions. What is left on relations
@@ -286,11 +303,28 @@ COMMIT;
 --   CREATE TRIGGER zzz_touch BEFORE UPDATE ON zzz_trigger_probe
 --     FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
 --   INSERT INTO zzz_trigger_probe (id) VALUES (1);
+--   GRANT SELECT, UPDATE ON zzz_trigger_probe TO authenticated;
+--
+--   r := r || '    the probe grants authenticated TRIGGER: '
+--          || has_table_privilege('authenticated', 'public.zzz_trigger_probe', 'TRIGGER')::text
+--          || '   (expect false — nothing granted it, which is the point of '
+--          || 'the next line)' || chr(10);
+--
+--   -- As authenticated, NOT as the owner. Run as postgres this test is a
+--   -- tautology: an owner needs no TRIGGER privilege, so it would print true
+--   -- however the revoke had gone. SET ROLE NONE is permitted to any role, so
+--   -- unlike the role switches elsewhere in these files this one can go in the
+--   -- middle of a block rather than at the end.
+--   PERFORM set_config('role', 'authenticated', true);
 --   UPDATE zzz_trigger_probe SET id = 1;
---   r := r || 'a trigger still fires after the revoke: '
+--   PERFORM set_config('role', 'none', true);
+--
+--   r := r || 'a trigger fires for a role holding no TRIGGER privilege: '
 --          || (SELECT (updated_at IS NOT NULL)::text FROM zzz_trigger_probe WHERE id = 1)
 --          || '   (expect true — TRIGGER governs attaching one, not running '
---          || 'one)' || chr(10);
+--          || 'one. PostgreSQL checks it at CREATE TRIGGER and never when one '
+--          || 'fires, which is why revoking it from service_role costs nothing)'
+--          || chr(10);
 --   DROP TABLE zzz_trigger_probe;
 --
 --   RAISE EXCEPTION 'VERIFY 20261103T2300_service_role_loses_truncate_and_trigger (all rolled back) %',
