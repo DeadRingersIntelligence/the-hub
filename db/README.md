@@ -698,6 +698,14 @@ mechanisms, because the rulings differed. The rule for choosing:
   by accident permits nothing. `data_sharing_agreements` is this shape; ending
   an agreement means a migration that sets `revoked_on`, and amending one means
   a new row rather than an edit.
+
+  **Why a migration and not a staff-only function:** terminations are expected
+  to be rare (user ruling, 4 November 2026), and a reviewed migration for
+  something that happens twice is cheaper than a function nobody exercises.
+  **The condition for revisiting is volume, not inconvenience** — if ending
+  agreements becomes routine, build the `is_internal()` function rather than
+  letting unreviewed `revoked_on` updates become the habit. A ruling worth
+  keeping is one that says what would change it.
 - **Only Dead Ringers writes it** — keep the grants and install a write policy
   of `USING (is_internal()) WITH CHECK (is_internal())`. The grants must stay,
   because internal staff sign in as `authenticated` like everyone else and a
