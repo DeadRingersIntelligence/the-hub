@@ -121,7 +121,10 @@
 -- benefit and a non-zero cost is one not to take, however small the cost looks.
 --
 -- SO THE RULE, which section 1 applies rather than a list of names: a function
--- the SYSTEM calls during a write stays PUBLIC. That means CHECK constraints,
+-- the SYSTEM calls during a write is SPARED FROM THE SWEEP, and whether it
+-- then needs PUBLIC is a separate question answered per function — by who
+-- writes the table it guards. submitted_text above is the proof that the two
+-- are not the same question. That means CHECK constraints,
 -- column defaults and generated columns, and index expressions — the three
 -- places a function runs without appearing in anybody's code, where a
 -- privilege failure arrives as a refused write rather than as a refused call.
