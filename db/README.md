@@ -582,12 +582,15 @@ The old default granted it, and a policy written `FOR ALL` because its author
 left the `FOR` clause off let it through. Two defaults, neither examined.
 
 **Two things this does not cover.** Existing tables keep every grant they
-have: `authenticated` can still write **85 of the 98 relations** in `public`,
-because default privileges apply at `CREATE` time and never retroactively. (It
-was 91 until `20261103T1000` took the writes off the six reference tables.)
-What stands between that and 85 more copies of finding 0 is the policies, so a
-policy written `FOR ALL` is still the thing to catch in review — and on
-4 November all 85 were checked: every one is scoped, and none has RLS off. And a table created
+have — `authenticated` can still write most tables in `public`, because
+default privileges apply at `CREATE` time and never retroactively. The exact
+count moves with every migration that revokes (it was 91 before
+`20261103T1000`, and `20261104T1200` took another), so **run the audit query
+under "What every policy rests on" for today's number** rather than trusting
+one written here. What stands between those tables and more copies of finding
+0 is the policies, so a policy written `FOR ALL` is the thing to catch in
+review — and on 4 November every write policy was read: all scoped, none with
+RLS off. And a table created
 through the **Supabase UI** is created by `supabase_admin`, follows that role's
 defaults rather than `postgres`'s, and arrives writable by everyone signed in —
 `ALTER DEFAULT PRIVILEGES` is per granting role and `postgres` is not a member
@@ -677,17 +680,17 @@ time — `_readable`, `partners_visible`, "Both sides of a sharing agreement may
 see it".
 
 **The catalogue cannot find the rest of them.** `polcmd = '*'` is correct for a
-great many policies that properly govern writes — 76 of 133 at the last count —
-so scanning for it is noise, and the write-policy audit of 4 November did not
-find these because it asked whether each policy was *scoped*, which all 112
-were. What found them was reading them. The scan that would work is a list of
-tables the application never writes, checked against the policies that permit
-writes, and it needs the application rather than the database.
+great many policies that properly govern writes — rather more than half of
+them — so scanning for it is noise, and the write-policy audit of 4 November
+did not find these because it asked whether each policy was *scoped*, which
+every one was. What found them was reading them. The scan that would work is a
+list of tables the application never writes, checked against the policies that
+permit writes, and it needs the application rather than the database.
 
 ### Which lock to use when a table should not be written
 
-Two files fixed the same shape four weeks apart and used opposite mechanisms,
-because the rulings differed. The rule for choosing:
+Two files fixed the same shape on the same afternoon and used opposite
+mechanisms, because the rulings differed. The rule for choosing:
 
 - **Nobody writes it through the API, not even Dead Ringers** — revoke
   `INSERT`, `UPDATE`, `DELETE` from the client roles and install **no write
@@ -700,6 +703,29 @@ because the rulings differed. The rule for choosing:
   because internal staff sign in as `authenticated` like everyone else and a
   revoke would stop them too. `organizations`, `partners` and the six
   reference tables are this shape.
+
+**Whichever lock, test the positive half.** A policy that denies everybody
+looks exactly like a policy that works, from outside. `20261104T1300`'s
+verification originally checked only that a firm *could not* write its own
+record, and would have passed unchanged if the policy had locked out Dead
+Ringers as well.
+
+### `revoked_on` does not revoke anything yet
+
+Nothing reads `data_sharing_agreements`. Checked on 4 November: no policy, no
+function, no view and no foreign key references it, while the same search finds
+26 functions mentioning `interactions`. **No access is granted from an
+agreement at all**, so setting `revoked_on` today has no effect beyond the
+record.
+
+The only cross-firm rule that actually grants anything is `partners_read`
+(formerly `partners_visible`), which works from `partner_access` and does check
+`revoked_on IS NULL`.
+
+So when something is eventually built that grants access *from* an agreement,
+it must check `revoked_on` **and** `covers_from` / `covers_to`. The columns
+exist, which makes it easy to assume they are being honoured — and easy to ship
+a reader that silently ignores both. Write that check first.
 
 ## SECURITY DEFINER functions
 
