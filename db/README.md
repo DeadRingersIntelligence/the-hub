@@ -215,7 +215,7 @@ and `20261103T1000`.
 
 ## Comparing the two databases
 
-Eight queries. Run each on both databases and compare the two cells. Each
+Nine queries. Run each on both databases and compare the two cells. Each
 returns a single cell, with `' => '` between a name and its definition and
 `' ;; '` between entries, because the editor's result grid flattens newlines
 and tabs — so a diff is a text comparison rather than a row-by-row read.
@@ -279,20 +279,47 @@ separating them again silently. This query is the only thing that would say so.
 It also shows `supabase_admin`'s entries, which cannot be changed and should
 be read as a constant rather than a finding.
 
-**One thing these eight still do not cover:** column comments. Not nothing — a
-comment is where this schema records why a column exists — but the only one of
-the gaps that cannot mislead anybody about access.
+```sql
+-- com: every comment in public, by object. C column, T table/view/index,
+-- F function, P policy, K constraint, Y type.
+SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT 'C ' || c.relname::text || '.' || a.attname::text AS k, left(md5(d.description), 12) AS v FROM pg_description d JOIN pg_class c ON c.oid = d.objoid AND d.classoid = 'pg_class'::regclass JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = d.objsubid WHERE n.nspname = 'public' AND d.objsubid > 0 UNION ALL SELECT 'T ' || c.relname::text, left(md5(d.description), 12) FROM pg_description d JOIN pg_class c ON c.oid = d.objoid AND d.classoid = 'pg_class'::regclass JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND d.objsubid = 0 UNION ALL SELECT 'F ' || p.oid::regprocedure::text, left(md5(d.description), 12) FROM pg_description d JOIN pg_proc p ON p.oid = d.objoid AND d.classoid = 'pg_proc'::regclass JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' UNION ALL SELECT 'P ' || cl.relname::text || '.' || pol.polname::text, left(md5(d.description), 12) FROM pg_description d JOIN pg_policy pol ON pol.oid = d.objoid AND d.classoid = 'pg_policy'::regclass JOIN pg_class cl ON cl.oid = pol.polrelid JOIN pg_namespace n ON n.oid = cl.relnamespace WHERE n.nspname = 'public' UNION ALL SELECT 'K ' || cl.relname::text || '.' || co.conname::text, left(md5(d.description), 12) FROM pg_description d JOIN pg_constraint co ON co.oid = d.objoid AND d.classoid = 'pg_constraint'::regclass JOIN pg_class cl ON cl.oid = co.conrelid JOIN pg_namespace n ON n.oid = cl.relnamespace WHERE n.nspname = 'public' UNION ALL SELECT 'Y ' || t.typname::text, left(md5(d.description), 12) FROM pg_description d JOIN pg_type t ON t.oid = d.objoid AND d.classoid = 'pg_type'::regclass JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = 'public') x;
+```
+
+**`com` closed the last gap, and it was a real one.** A comment-only
+divergence was invisible to all of the others: `fn` hashes `prosrc` and not a
+function's comment, `mig` hashes policy expressions and not policy comments,
+`col` has a column's type and default and not its comment. That shape occurs
+here — `20261103T1000` and `20261104T1200` both set policy comments *inside*
+their transaction blocks — and this schema keeps much of its reasoning in
+comments, so losing one silently costs more than usual.
+
+The composition says the same thing. Of 147 entries on 6 November: **62
+columns, 50 functions**, 17 policies, 12 tables, 6 constraints, 0 types. The
+two biggest groups are exactly where `col` and `fn` would not have noticed.
+
+The comment text is hashed rather than carried, as in `con` and `trg`: a
+differing key names the object to go and read, and the cell stays comparable
+instead of enormous.
+
+**The `Y` branch returns nothing today and was proved separately**, because a
+branch that has never returned a row is indistinguishable from one that does
+not work — the same shape as the checks under **Writing a verification
+block**. Measured on staging in a rolled-back block: `COMMENT ON TYPE
+case_need_type` made a `Y case_need_type` key appear, the count went 147 → 148,
+and the rollback returned it to `968257c6…`. So `Y = 0` means no type carries
+a comment, not that the query cannot see one.
 
 ### The baseline, 4 November 2026
 
-All eight ran identically on staging and production on 4 November 2026, for the
-first time. This is the state to diff against: a later run that differs from
+All of them ran identically on staging and production on 4 November 2026, for
+the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
 | query | md5 | characters |
 |---|---|---|
 | `acl` | `78bb831ee336c4d76d6f0413ad626847` | 43533 |
 | `col` | `6bd6f01cda27cf51ce7d8ef2a7623dfd` | 76918 |
+| `com` | `968257c6b27b3f6c14c6e8d75630e9f0` | 7597 |
 | `con` | `ced2d050bcded68c18cf2e6e770a9d2b` | 50386 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
 | `fn` | `bc357a3bc042dac1234c2b4fb71c26ea` | 10911 |
@@ -303,7 +330,7 @@ these, on either database, has found a change made since.
 **A migration applied to both databases moves the baseline, and the migration
 that moved it updates this table in its own pull request.** Not later, and not
 by whoever next runs the queries. The order is the one already in use: apply on
-staging, apply on production, re-run the eight queries, update the affected
+staging, apply on production, re-run the nine queries, update the affected
 rows here, commit the migration and the new baseline together.
 
 That makes the baseline part of review rather than a chore after it. A reviewer
@@ -312,8 +339,9 @@ what it does, and — the point of the whole thing — **a mismatch found later
 always means a change nobody intended**, because every intended one arrived
 with its own update.
 
-One thing it does not prove, so that a row of matching hashes is not read as
-more than it is: nothing here covers column comments.
+Nothing is known to be uncovered since `com` joined them on 6 November, which
+is a weaker statement than it sounds: it means nobody has named a tenth gap,
+not that there is none.
 
 `col` used to be a second gap. It read `information_schema.columns.data_type`,
 which drops the type modifier, so `numeric(4,2)` and a bare `numeric` compared
