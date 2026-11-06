@@ -579,9 +579,9 @@ test fails to break anything when the role also holds a direct grant. In every
 case the check was measuring the absence of a precondition rather than the
 presence of a rule.
 
-**Read the table's constraints before writing the `INSERT`.** Seven fixtures in
-one piece of work failed on a column or value invented from what the table is
-*for* rather than read from what it *requires*: `cases.need_type`,
+**Read the table's constraints before writing the `INSERT`.** Across one piece
+of work, fixture after fixture failed on a column or value invented from what
+the table is *for* rather than read from what it *requires*: `cases.need_type`,
 `interactions.last_activity_at`, `interaction_channel` having no `voice`,
 `link_method` on two tables, `seat_type` having no `deskphone`,
 `directory_entry_kind` having no `person`, `consent_source` having no `verbal`,
@@ -603,9 +603,10 @@ Create a user, scope it, and enter through `request.jwt.claims` — the fixtures
 in `20261106T1000` onward show the shape.
 
 **Test the positive half.** A policy that denies everybody looks exactly like a
-policy that works. `20261106T1300`'s predecessor checked only that a firm user
-*could not* write, and would have passed unchanged had the rule locked out Dead
-Ringers too.
+policy that works. The case was `20261104T1300`, and it is set out under
+**Which lock to use when a table should not be written** rather than repeated
+here — the rule appears in this section because it is a verification mistake,
+and in that one because it is a policy mistake.
 
 **Some properties are not testable from inside a block, and the honest move is
 to test them against the source.** "The refusal happens before any write"
