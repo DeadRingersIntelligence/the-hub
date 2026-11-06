@@ -53,7 +53,20 @@
 --
 -- Requires: 20261106T1000, T1100, T1200 (the three bodies this replaces),
 --           20261103T1200.
--- Safe to run twice: each body has a three-state drift check.
+--
+-- NOT SAFE TO RUN TWICE, although it easily could be, and an earlier version
+-- of this line claimed it was. The body is four CREATE OR REPLACEs and would
+-- apply identically a second time; it is the precondition that refuses, with
+-- "all three already call the shared check". So a re-run fails and rolls
+-- back — harmless, but it means this file cannot be used to refresh its
+-- ledger row, which is what record_migration's COALESCE and its separate
+-- first_applied_at exist for.
+--
+-- That was an inconsistency rather than a decision. An idempotent body should
+-- notice and carry on; a body that cannot run twice should raise. The rule is
+-- now in db/README.md under "Re-running an applied migration". This file is
+-- left as it is because it has run, and changing a precondition to make a
+-- re-run possible is not worth a migration.
 -- =============================================================================
 
 BEGIN;
