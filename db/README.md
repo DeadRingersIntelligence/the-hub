@@ -561,6 +561,75 @@ error naming a constraint — `locations_funeral_rule_ck`, `outcomes_won_ck`,
 A failing test that returns "success, no rows returned" has **not** passed. It
 found nothing to insert. Check the source rows exist before trusting it.
 
+## Writing a verification block
+
+A verification block is the only thing standing between a migration and
+production, and over 3-6 November **seven of them contained a check that could
+not fail** — each correct-looking, each passing, none of them measuring what
+it claimed. They came in one shape and the rules below are what fell out of
+it.
+
+**Arrange for the thing to be permitted before testing whether it is.** This is
+the whole family in one line. A write test against an empty table reports zero
+rows whether the policy works or not. A "can this role still write" test run as
+the owner passes whatever the grants say, because the owner bypasses row-level
+security. A "the trigger still fires" test run as the table's owner passes
+because an owner needs no `TRIGGER` privilege. A "revoking `PUBLIC` breaks this"
+test fails to break anything when the role also holds a direct grant. In every
+case the check was measuring the absence of a precondition rather than the
+presence of a rule.
+
+**Read the table's constraints before writing the `INSERT`.** Seven fixtures in
+one piece of work failed on a column or value invented from what the table is
+*for* rather than read from what it *requires*: `cases.need_type`,
+`interactions.last_activity_at`, `interaction_channel` having no `voice`,
+`link_method` on two tables, `seat_type` having no `deskphone`,
+`directory_entry_kind` having no `person`, `consent_source` having no `verbal`,
+`contact_merge_dismissals` needing `dismissed_by` and `contact_a_id <
+contact_b_id`, and `contact_phones` needing `organization_id`. The fix is
+mechanical: before the `INSERT`, read that table's `NOT NULL` columns without
+defaults, its `CHECK` constraints and its uniques.
+
+**A refusal check must test the reason.** A handler that treats any error as a
+pass cannot tell a working rule from a missing function — one of these
+"passed" because the function did not exist in that transaction yet. Compare
+`SQLERRM` against the message the rule raises and label the line WRONG REASON
+when it does not match.
+
+**Run as the role the function is for.** An `INVOKER` function run by the owner
+exercises none of the policies it will meet in use, and cross-firm rules cannot
+be tested from the owner at all, because to the owner there is no other firm.
+Create a user, scope it, and enter through `request.jwt.claims` — the fixtures
+in `20261106T1000` onward show the shape.
+
+**Test the positive half.** A policy that denies everybody looks exactly like a
+policy that works. `20261106T1300`'s predecessor checked only that a firm user
+*could not* write, and would have passed unchanged had the rule locked out Dead
+Ringers too.
+
+**Some properties are not testable from inside a block, and the honest move is
+to test them against the source.** "The refusal happens before any write"
+cannot be shown by reading rows after a caught exception: the subtransaction
+rolled back, so the state is identical either way, and a before-and-after
+snapshot reads equal for the same reason. Read `prosrc` instead — and write it
+as `position(msg in src) BETWEEN 1 AND position(first_update in src) - 1`,
+because `position()` returns 0 for absent text and a bare `<` passes for a
+message that has been renamed away.
+
+### Re-running an applied migration
+
+A file whose body is idempotent should treat "already done" as a `NOTICE` and
+carry on, so a second run is a no-op that refreshes the ledger row — which is
+what `record_migration`'s `COALESCE` and its separate `first_applied_at` were
+built for. A file whose body cannot run twice — `CREATE TYPE`, `ADD COLUMN`,
+anything that would half-apply — should `RAISE` instead, and say so rather
+than claiming to be safe to run twice.
+
+`20261106T1300` got this wrong in the harmless direction: its body is four
+`CREATE OR REPLACE`s and could perfectly well run again, but its precondition
+raises, so the header's "safe to run twice" is not what it does. Left as it
+is, noted in that file.
+
 ## What the schema enforces
 
 Rules that are refused at write time rather than documented and hoped for:
