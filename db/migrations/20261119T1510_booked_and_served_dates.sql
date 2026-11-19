@@ -39,6 +39,12 @@
 --     correction through without one; it can move revenue between months,
 --     which is the thing a manager is now told about.
 --
+--   * ON HOLD NO LONGER COUNTS AS REVENUE (Mandie, 19 Nov: "It's most likely
+--     on hold because it's unpaid"). 2100 ruled that on hold moves nothing
+--     already counted. Putting a counted case on hold now needs a reason and
+--     notifies the managers, like losing it; taking it off hold notifies them
+--     the revenue is back.
+--
 -- REVENUE IN A PAST MONTH CAN NOW MOVE. That is the price of the ruling and
 -- it is accepted. What makes a moved month explicable afterwards is the
 -- reason on the history row and the notification each manager received.
@@ -98,6 +104,9 @@
 -- Left to Mandie: whether confirming in another month, or reinstating, should
 -- also need a reason. Both notify; neither needs one. The one place to change
 -- is case_change_needs_reason.
+-- AND ONE RULING, after the review (Mandie, 19 Nov): on hold is not revenue.
+-- case_revenue_date_for excludes it; everything else followed from the rule
+-- without further code. Verification e.
 --
 -- NOT SAFE TO RUN TWICE. ADD COLUMN and the DROP/CREATE of two functions
 -- whose signatures change would half-apply. The precondition refuses a
@@ -202,9 +211,10 @@ COMMENT ON COLUMN cases.status IS
   'The case''s outcome, one of three fixed values: active — the family chose '
   'the firm; lost — they chose it and did not proceed, or did and the firm '
   'lost the revenue afterwards; on_hold. This column is NOT what revenue '
-  'reads: case_revenue_date() is, and it excludes lost and nothing else. A '
+  'reads: case_revenue_date() is, and it excludes lost and on_hold. A '
   'served case CAN be marked lost (20261119T1510 reversed 2100 on this); doing '
-  'so needs a reason and notifies the firm''s managers, and keeps served_on. '
+  'so needs a reason and notifies the firm''s managers, and keeps served_on; '
+  'so does putting a counted case on hold. '
   'The firm''s own name for the state is cases.status_item_id. Lost and '
   'on_hold both KEEP everything and both reverse. NEVER set from an undo '
   'control — see delete_case().';
@@ -244,23 +254,27 @@ CREATE TRIGGER cases_set_created_by_t BEFORE INSERT ON cases
 -- 3. The three rules, each stated once
 -- -----------------------------------------------------------------------------
 
--- On hold is NOT excluded. The earlier ruling: on hold suppresses the
--- pipeline view but does not retract recognised revenue. Open question to
--- Mandie in the planning note — if she rules otherwise, this is the one place
--- to change.
+-- ON HOLD IS EXCLUDED, like lost (Mandie, 19 Nov): "It's most likely on hold
+-- because it's unpaid." This reverses 2100's ruling that on hold moves
+-- nothing that has been counted. Because every other rule asks this one,
+-- putting a counted case on hold needs a reason and notifies the managers,
+-- and taking it off hold notifies them that the revenue is back — the same
+-- as lost and reinstated, with no further code. served_on and the booked
+-- date are kept; the case counts again on them when it comes off hold.
 CREATE FUNCTION case_revenue_date_for(p_status case_status, p_served date, p_booked date)
 RETURNS date LANGUAGE sql STABLE AS $$
   SELECT CASE
-           WHEN p_status = 'lost'        THEN NULL
-           WHEN p_served IS NOT NULL     THEN p_served
-           WHEN p_booked <= current_date THEN p_booked
+           WHEN p_status IN ('lost', 'on_hold') THEN NULL
+           WHEN p_served IS NOT NULL            THEN p_served
+           WHEN p_booked <= current_date        THEN p_booked
          END
 $$;
 
 COMMENT ON FUNCTION case_revenue_date_for(case_status, date, date) IS
-  'THE revenue rule, over values: null for a lost case; otherwise the '
-  'confirmed served date; otherwise the booked date once it has arrived; '
-  'otherwise null. On hold is not excluded. Takes values rather than a case '
+  'THE revenue rule, over values: null for a lost or on-hold case (on hold '
+  'is most likely unpaid — Mandie, 19 Nov); otherwise the confirmed served '
+  'date; otherwise the booked date once it has arrived; otherwise null. '
+  'Takes values rather than a case '
   'so a trigger can ask it of the row as it was. Everything else calls this '
   'or case_revenue_date(); nothing restates it.';
 
@@ -288,8 +302,9 @@ $$;
 COMMENT ON FUNCTION case_awaiting_confirmation_for(case_status, date, date) IS
   'THE confirmation rule, over values: not lost, no confirmed served date, '
   'and a booked date that has arrived. Such a case already counts as revenue '
-  'on its booked date; this asks a person to confirm, correct, or mark it '
-  'lost.';
+  'on its booked date — unless it is on hold, which still asks: whether the '
+  'service took place is worth confirming even while it is unpaid. Asks a '
+  'person to confirm, correct, or mark it lost.';
 
 CREATE FUNCTION case_awaiting_confirmation(p_case uuid)
 RETURNS boolean LANGUAGE sql STABLE AS $$
@@ -589,16 +604,21 @@ BEGIN
   v_reason := NULLIF(btrim(COALESCE(p_reason, '')), '');
 
   -- A case that counts as revenue can be lost — the family disputed, the
-  -- firm comped the service — but it takes money out of a month that may be
-  -- closed, so it needs a reason, and the managers are told. Losing a case
-  -- that was never revenue needs neither; reinstating needs none either, and
-  -- is still told to the managers.
+  -- firm comped the service — or put on hold, most likely because it is
+  -- unpaid. Either takes money out of a month that may be closed, so it needs
+  -- a reason, and the managers are told. Doing either to a case that was
+  -- never revenue needs neither; reinstating, or taking a case off hold,
+  -- needs none either, and is still told to the managers.
   IF v_reason IS NULL
      AND case_change_needs_reason(v_was, v_served, v_booked, v_outcome, v_served, v_booked) THEN
-    RAISE EXCEPTION 'this case counts as revenue on %, so marking it lost needs a reason',
-      to_char(case_revenue_date_for(v_was, v_served, v_booked), 'FMMonth FMDD, YYYY')
+    RAISE EXCEPTION 'this case counts as revenue on %, so %',
+      to_char(case_revenue_date_for(v_was, v_served, v_booked), 'FMMonth FMDD, YYYY'),
+      CASE WHEN v_outcome = 'on_hold' THEN 'putting it on hold needs a reason'
+           ELSE 'marking it lost needs a reason' END
       USING ERRCODE = 'RV001',
-            HINT = 'Say why — for example, the family disputed the bill and the services were comped. It goes on the case''s history and to your managers.';
+            HINT = CASE WHEN v_outcome = 'on_hold'
+                        THEN 'Say why — for example, the bill hasn''t been paid. It goes on the case''s history and to your managers.'
+                        ELSE 'Say why — for example, the family disputed the bill and the services were comped. It goes on the case''s history and to your managers.' END;
   END IF;
 
   PERFORM set_config('hub.case_change_reason', COALESCE(v_reason, ''), true);
@@ -675,7 +695,8 @@ COMMENT ON FUNCTION set_case_lost(uuid, boolean, text) IS
 --     left should be told it returned.
 -- So it fires on all three columns the rule reads, and asks the rule.
 -- Changes that leave the revenue date where it was notify nobody: a served
--- date confirmed as the booked date, a future booking moved, on hold.
+-- date confirmed as the booked date, a future booking moved, an uncounted
+-- case put on hold.
 --
 -- WHETHER A REASON WAS NEEDED is case_change_needs_reason(). When one was
 -- needed and none arrived, the change went round the functions (a direct
@@ -740,8 +761,12 @@ BEGIN
   v_what := CASE
     WHEN NEW.status = 'lost' AND OLD.status IS DISTINCT FROM 'lost'
       THEN format('marked %s lost', v_case_words)
+    WHEN NEW.status = 'on_hold' AND OLD.status IS DISTINCT FROM 'on_hold'
+      THEN format('put %s on hold', v_case_words)
     WHEN OLD.status = 'lost' AND NEW.status IS DISTINCT FROM 'lost'
       THEN format('reinstated %s', v_case_words)
+    WHEN OLD.status = 'on_hold' AND NEW.status IS DISTINCT FROM 'on_hold'
+      THEN format('took %s off hold', v_case_words)
     WHEN OLD.served_on IS NULL AND NEW.served_on IS NOT NULL
       THEN format('confirmed %s as served on %s', v_case_words,
                   to_char(NEW.served_on, 'FMMon FMDD, YYYY'))
@@ -795,8 +820,8 @@ END $$;
 
 COMMENT ON FUNCTION case_revenue_moved_notify() IS
   'Tells a firm''s managers when a case''s revenue date changes '
-  '(case_revenue_date_for, OLD against NEW): lost after counting, '
-  'reinstated, a served date confirmed in another month, changed or removed, '
+  '(case_revenue_date_for, OLD against NEW): lost or put on hold after '
+  'counting, reinstated or taken off hold, a served date confirmed in another month, changed or removed, '
   'a passed booked date moved. One case_revenue_moved notification per '
   'manager, not to whoever made the change, carrying the reason, or "No '
   'reason recorded" when one was needed (case_change_needs_reason) and none '
@@ -883,14 +908,14 @@ BEGIN
     ('case_change_needs_reason(case_status,date,date,case_status,date,date)', '8f4f4e604fc7d3793b2b66e8dbcff1fd'),
     ('case_responsible_users(uuid)', '49fe944846e63306fd926e9776b50bc3'),
     ('case_revenue_date(uuid)', '54e85d7ed7f6ead928636461da927086'),
-    ('case_revenue_date_for(case_status,date,date)', 'f5e6ffad9e68bf7fc259e9779ed60168'),
-    ('case_revenue_moved_notify()', 'e235a9d7ae9737c0cee8c86e465c6e83'),
+    ('case_revenue_date_for(case_status,date,date)', '5001f8b22a317bd7553eff357a0dc642'),
+    ('case_revenue_moved_notify()', 'ab8d167894b42b6688637dbdaa9785a8'),
     ('cases_set_created_by()', '8f293d32fd2b62aa31bf8608c6b5c68e'),
     ('my_cases_awaiting_confirmation()', '2c6ca6d8a9b2a7e5df786116114826b2'),
     ('set_case_booked_date(uuid,date,text)', 'a5020b1f29616aa9c32ffacf2efea1f1'),
     ('set_case_lost(uuid,boolean,text)', 'f2d2191da56c84bd09cfdb6898731910'),
     ('set_case_served(uuid,date,text)', 'fdf0093badeda31b9e50e656ad4cebf3'),
-    ('set_case_status(uuid,uuid,text)', '75d70bec087b6f70f2dcf2ba64b9f5fa')
+    ('set_case_status(uuid,uuid,text)', '85a68778620663755927e2efb6a3bc07')
          ) AS e(sig, want)
     LEFT JOIN pg_proc p ON p.oid = to_regprocedure(e.sig)
    WHERE md5(p.prosrc) IS DISTINCT FROM e.want;
@@ -931,7 +956,8 @@ COMMIT;
 --
 -- The planning session's eight checks are numbered 1-8; a-d are the review's
 -- (a passed booked date moved, a confirmation in another month, a
--- reinstatement, a firm with nobody to notify); the unnumbered lines are
+-- reinstatement, a firm with nobody to notify), and e is Mandie's on-hold
+-- ruling; the unnumbered lines are
 -- added positive halves and the things the design named as unchanged.
 -- Line 6 compares counts BEFORE the fixture exists, and says when both are
 -- zero, because then it proves nothing.
@@ -954,7 +980,7 @@ COMMIT;
 --   v_org uuid; v_dir uuid; v_mgr uuid; v_oth uuid;
 --   a_dir uuid := gen_random_uuid(); a_mgr uuid := gen_random_uuid(); a_oth uuid := gen_random_uuid();
 --   c_future uuid; c_past uuid; c_served uuid; c_served2 uuid; c_unserved uuid; c_new uuid;
---   c_conf uuid; c_book uuid; c_solo uuid; v_org2 uuid; v_solo uuid; a_solo uuid := gen_random_uuid();
+--   c_conf uuid; c_book uuid; c_hold uuid; c_solo uuid; v_org2 uuid; v_solo uuid; a_solo uuid := gen_random_uuid();
 --   v_dec uuid; n_hist int; n_set int; n_mgr int;
 -- BEGIN
 --   PERFORM set_config('app.is_internal', 'on', true);
@@ -1010,8 +1036,10 @@ COMMIT;
 --   VALUES (v_org, 'at_need', v_dir, t - 4) RETURNING id INTO c_conf;
 --   INSERT INTO cases (organization_id, need_type, created_by)
 --   VALUES (v_org, 'pre_need', v_dir) RETURNING id INTO c_book;
+--   INSERT INTO cases (organization_id, need_type, created_by, served_on)
+--   VALUES (v_org, 'at_need', v_dir, t - 7) RETURNING id INTO c_hold;
 --   UPDATE cases SET status_item_id = case_status_default(v_org, 'active')
---    WHERE id IN (c_future, c_past, c_served, c_served2, c_unserved, c_conf, c_book);
+--    WHERE id IN (c_future, c_past, c_served, c_served2, c_unserved, c_conf, c_book, c_hold);
 --
 --   -- A second firm whose only user is a professional: nobody to notify.
 --   INSERT INTO organizations (name, client_type)
@@ -1041,7 +1069,7 @@ COMMIT;
 --          || ', at today-1: ' || case_awaiting_confirmation_for('active', NULL, t - 1)
 --          || '   (expect false, true)' || chr(10);
 --   r := r || '   on hold, served — revenue date: ' || COALESCE(case_revenue_date_for('on_hold', t - 5, NULL)::text, 'null')
---          || '   (expect ' || (t - 5) || ' — on hold does not retract revenue; open question to Mandie)' || chr(10);
+--          || '   (expect null — on hold is not revenue, Mandie 19 Nov)' || chr(10);
 --
 --   r := r || '   trigger functions callable by authenticated: '
 --          || has_function_privilege('authenticated', 'case_revenue_moved_notify()', 'EXECUTE') || ', '
@@ -1196,7 +1224,32 @@ COMMIT;
 --   EXCEPTION WHEN others THEN
 --     r := r || 'c. reinstating: REFUSED (BAD): ' || SQLERRM || chr(10);
 --   END;
+--   -- On hold (Mandie, 19 Nov): out of revenue, so a reason going on, and told
+--   -- both ways.
+--   BEGIN
+--     PERFORM set_case_status(c_hold, case_status_default(v_org, 'on_hold'));
+--     r := r || 'e. a served case put ON HOLD without a reason: ALLOWED (BAD)' || chr(10);
+--   EXCEPTION WHEN others THEN
+--     r := r || 'e. a served case put on hold without a reason refused: ' || SQLERRM || ' [' || SQLSTATE || ']'
+--            || CASE WHEN SQLSTATE = 'RV001' AND SQLERRM LIKE '%on hold needs a reason%' THEN '   (right reason)'
+--                    ELSE '   (WRONG REASON)' END || chr(10);
+--   END;
+--   BEGIN
+--     PERFORM set_case_status(c_hold, case_status_default(v_org, 'on_hold'), 'ZZZ bill unpaid');
+--     r := r || '   with a reason: allowed; revenue date now '
+--            || COALESCE(case_revenue_date(c_hold)::text, 'null') || '   (expect null)' || chr(10);
+--     PERFORM set_case_lost(c_hold, false);
+--     r := r || '   taken off hold (reinstated), no reason: allowed; revenue date now '
+--            || COALESCE(case_revenue_date(c_hold)::text, 'null') || '   (expect ' || (t - 7) || ')' || chr(10);
+--   EXCEPTION WHEN others THEN
+--     r := r || '   on hold with a reason, or off again: REFUSED (BAD): ' || SQLERRM || chr(10);
+--   END;
+--
 --   PERFORM set_config('role', 'postgres', true);
+--   r := r || '   manager told about on hold: '
+--          || COALESCE((SELECT string_agg(body, ' | ' ORDER BY body DESC) FROM notifications
+--                        WHERE user_id = v_mgr AND subject_id = c_hold AND event = 'case_revenue_moved'), 'NOTHING (BAD)') || chr(10)
+--          || '   (expect two: put on hold — no longer counts — Reason: bill unpaid; and taken off hold — now counts again)' || chr(10);
 --   r := r || '   manager told — a: '
 --          || COALESCE((SELECT body FROM notifications WHERE user_id = v_mgr AND subject_id = c_future AND event = 'case_revenue_moved' AND body LIKE '%Reason:%' LIMIT 1), 'NOTHING (BAD)') || chr(10)
 --          || '   b: ' || COALESCE((SELECT body FROM notifications WHERE user_id = v_mgr AND subject_id = c_conf AND event = 'case_revenue_moved' LIMIT 1), 'NOTHING (BAD)') || chr(10)
