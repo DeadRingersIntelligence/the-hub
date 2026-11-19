@@ -42,6 +42,14 @@
 -- block (ADD VALUE can't be used in its own transaction), so the raise was
 -- also exercised on the scratch rebuild with a real added value.
 --
+-- APPLIED to staging (17:46 UTC) and production (17:56 UTC), 19 Nov 2026,
+-- from the file hashed ed610cd5, commit 232d621. ran_md5
+-- 6c7fe3093bbbe2b3139018a19242efdb (27764 characters) on both: the file's
+-- text exactly, INCLUDING its final newline — it was loaded into the editor
+-- rather than pasted, which keeps the newline a paste drops (db/README.md,
+-- "Two hashes"). This note and the verification result at the foot were
+-- added afterwards.
+--
 -- NOT SAFE TO RUN TWICE: the precondition refuses if the new function
 -- exists, and says so.
 --
@@ -417,7 +425,11 @@ COMMIT;
 -- it matched too. After the review's change, all of that was run again and
 -- matched, and on the scratch database only a real fourth value was added to
 -- case_need_type: the function refused it, naming it, both called directly
--- and through create_case_for_call's `<>` check. NOT YET RUN ON STAGING.
+-- and through create_case_for_call's `<>` check.
+--
+-- RUN ON STAGING AND ON PRODUCTION, 19 Nov, after the migration: all seven
+-- lines matched on both, identical to each other and to the scratch
+-- rebuild's.
 --
 -- DO $$
 -- DECLARE

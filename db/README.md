@@ -90,7 +90,7 @@ text, which is the `003` case: staging holds a `people_org_name_uq` without the
 `WHERE merged_into IS NULL` that the repository has, and nothing surfaced it for
 a month.
 
-Before calling a mismatch drift, rule out four innocent causes:
+Before calling a mismatch drift, rule out five innocent causes:
 
 - **The file was annotated after it ran.** A header note or a corrected comment
   changes `sha256` and must not change `ran_md5`. This is the common one.
@@ -103,6 +103,13 @@ Before calling a mismatch drift, rule out four innocent causes:
   two-block files before it (`20261030T1930`, `20261030T2100`) were
   backfilled with no `ran_md5` at all. **New files: split instead** — see
   below.
+- **How the file was entered.** Pasting into the editor drops the file's
+  final newline; loading the file into it keeps the newline. The same file
+  therefore has two possible `ran_md5` values, one character apart in
+  `ran_len`. `20261119T1500` / `T1510` / `T1800` were pasted and match the
+  file less its final newline; `20261119T1900` was loaded and matches the
+  file whole. **Enter a file the same way on both databases** — a mismatch
+  of exactly one character in `ran_len` is this, not drift.
 - **The editor changed its trailer.** `submitted_text()` anchors on the
   `-- source: dashboard` marker and removes everything after it, so a fourth
   line or a reordering is still stripped; a renamed marker is not.
