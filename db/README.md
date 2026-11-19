@@ -90,7 +90,7 @@ text, which is the `003` case: staging holds a `people_org_name_uq` without the
 `WHERE merged_into IS NULL` that the repository has, and nothing surfaced it for
 a month.
 
-Before calling a mismatch drift, rule out four innocent causes:
+Before calling a mismatch drift, rule out five innocent causes:
 
 - **The file was annotated after it ran.** A header note or a corrected comment
   changes `sha256` and must not change `ran_md5`. This is the common one.
@@ -103,6 +103,13 @@ Before calling a mismatch drift, rule out four innocent causes:
   two-block files before it (`20261030T1930`, `20261030T2100`) were
   backfilled with no `ran_md5` at all. **New files: split instead** — see
   below.
+- **How the file was entered.** Pasting into the editor drops the file's
+  final newline; loading the file into it keeps the newline. The same file
+  therefore has two possible `ran_md5` values, one character apart in
+  `ran_len`. `20261119T1500` / `T1510` / `T1800` were pasted and match the
+  file less its final newline; `20261119T1900` was loaded and matches the
+  file whole. **Enter a file the same way on both databases** — a mismatch
+  of exactly one character in `ran_len` is this, not drift.
 - **The editor changed its trailer.** `submitted_text()` anchors on the
   `-- source: dashboard` marker and removes everything after it, so a fourth
   line or a reordering is still stripped; a renamed marker is not.
@@ -320,8 +327,12 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261119T1800`**, run on both databases on 19 November and
-identical on both afterwards: `fn`, `acl` and `com` moved for its one new
+**Last moved by `20261119T1900`**, run on both databases on 19 November and
+identical on both afterwards: `fn`, `acl` and `com` moved for the new
+`decedent_status_for_need_type`, its grant and comment, and the two bodies
+that now call it; nothing else did, as predicted. **Before that, by
+`20261119T1800`**, run on both databases on 19 November and identical on
+both afterwards: `fn`, `acl` and `com` moved for its one new
 function, its grants and its comment, and nothing else did — as predicted
 before the queries were run. **Before that, by `20261119T1500` / `T1510`**,
 run on both databases on 19 November and identical on both afterwards. Seven rows moved and two did not,
@@ -336,12 +347,12 @@ md5 and length.
 
 | query | md5 | characters |
 |---|---|---|
-| `acl` | `ee8f6367f8519d9900d856b9d4622142` | 44442 |
+| `acl` | `b332ea30488296d2a5a10afa89e4d3b8` | 44551 |
 | `col` | `02a3e69111b1c32f6813d652598e49c4` | 77025 |
-| `com` | `9885d2dc703e692ba47d3f3faea61003` | 8349 |
+| `com` | `ef95bbcfe59659a72a6f6440f9ce00bb` | 8432 |
 | `con` | `e8ab294ac7fe127796b26c187060aa2a` | 50479 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `fce040e8bb8e8d22889cd84224d85469` | 11876 |
+| `fn` | `627476d92b04b3cf2d276d8c807bc617` | 11988 |
 | `mig` | `579d28a007a83087596f1844a804f8ec` | 15850 |
 | `trg` | `4f6f23e045b4e57357eda3c9c8332868` | 6700 |
 | `typ` | `53df0c832893897ebc8d4cddd4ac5c8d` | 6486 |
