@@ -101,10 +101,11 @@
 --     there, and verification d proves it;
 --   * case_converted_notify's comment now points here, so nobody harmonises
 --     the two handlers.
--- Left to Mandie: whether confirming in another month, or reinstating, should
--- also need a reason. Both notify; neither needs one. The one place to change
--- is case_change_needs_reason.
--- AND ONE RULING, after the review (Mandie, 19 Nov): on hold is not revenue.
+-- Two rulings after the review (Mandie, 19 Nov):
+--   * confirming in another month, and reinstating or taking a case off
+--     hold, stay FREE: no reason, they just notify. Ruled, not left open;
+--     the one place to change it is case_change_needs_reason;
+--   * on hold is not revenue.
 -- case_revenue_date_for excludes it; everything else followed from the rule
 -- without further code. Verification e.
 --
@@ -326,9 +327,8 @@ COMMENT ON FUNCTION case_awaiting_confirmation(uuid) IS
 -- first confirmation of a served date, which is the ordinary work the prompt
 -- asks for even when it lands in a different month from the booking.
 -- Reinstating needs none: the case did not count before. Both exceptions
--- still NOTIFY (section 7); this decides only the reason. Which of them
--- should also need a reason is Mandie's call, and this is the one place to
--- change it.
+-- still NOTIFY (section 7); this decides only the reason. Mandie, 19 Nov:
+-- "Leave both free, they just notify." This is the one place to change it.
 CREATE FUNCTION case_change_needs_reason(
   p_old_status case_status, p_old_served date, p_old_booked date,
   p_new_status case_status, p_new_served date, p_new_booked date)
