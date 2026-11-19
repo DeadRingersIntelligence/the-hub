@@ -314,23 +314,34 @@ case_need_type` made a `Y case_need_type` key appear, the count went 147 → 148
 and the rollback returned it to `968257c6…`. So `Y = 0` means no type carries
 a comment, not that the query cannot see one.
 
-### The baseline, 4 November 2026
+### The baseline, 19 November 2026
 
 All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
+**Last moved by `20261119T1500` / `T1510`**, run on both databases on 19
+November and identical on both afterwards. Seven rows moved and two did not,
+each for a reason the files account for: `typ` grew by exactly the 19
+characters of `,case_revenue_moved`; `trg` by the two new triggers; `col` by
+the two new columns; `con` by `created_by`'s foreign key and the booked-date
+index; `fn`, `acl` and `com` by the new and replaced functions, their grants
+and their comments, including the sentence added to `case_converted_notify`'s.
+`mig` and `defacl` are unchanged, correctly — no table, policy or default
+privilege changed. All nine were run as one query, each cell reduced to its
+md5 and length.
+
 | query | md5 | characters |
 |---|---|---|
-| `acl` | `78bb831ee336c4d76d6f0413ad626847` | 43533 |
-| `col` | `6bd6f01cda27cf51ce7d8ef2a7623dfd` | 76918 |
-| `com` | `968257c6b27b3f6c14c6e8d75630e9f0` | 7597 |
-| `con` | `ced2d050bcded68c18cf2e6e770a9d2b` | 50386 |
+| `acl` | `258e36c0968ee58828426f5a13563c5b` | 44345 |
+| `col` | `02a3e69111b1c32f6813d652598e49c4` | 77025 |
+| `com` | `2dd24b678350534505a3065e125ac82b` | 8278 |
+| `con` | `e8ab294ac7fe127796b26c187060aa2a` | 50479 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `bc357a3bc042dac1234c2b4fb71c26ea` | 10911 |
+| `fn` | `2230409491fa946d2fd0d6aa84f33d85` | 11786 |
 | `mig` | `579d28a007a83087596f1844a804f8ec` | 15850 |
-| `trg` | `087000700dea24395739dab7f52f3ef0` | 6543 |
-| `typ` | `a713741449e51c3fa3d8d84849289f5a` | 6467 |
+| `trg` | `4f6f23e045b4e57357eda3c9c8332868` | 6700 |
+| `typ` | `53df0c832893897ebc8d4cddd4ac5c8d` | 6486 |
 
 **A migration applied to both databases moves the baseline, and the migration
 that moved it updates this table in its own pull request.** Not later, and not
