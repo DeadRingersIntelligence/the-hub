@@ -948,6 +948,22 @@ wanted is already true.
 tripped it — counted across users, so a different message for "it wasn't you"
 would tell somebody that a colleague has been asking for codes for that number.
 
+### RV — revenue moving on a case
+
+Raised by `set_case_status()` (and so `set_case_lost()`) and `set_case_served()`
+(`20261119T1510`).
+
+| Code | Means | Raised by |
+|---|---|---|
+| `RV001` | This change moves revenue on a case that has counted, and needs a reason | `set_case_status`, `set_case_served` |
+
+`RV001` is the app's cue to ask for a reason and try again, not a refusal of
+the change itself. It is raised for marking lost a case that counts as revenue
+(`case_revenue_date()` is set), and for changing or removing a recorded
+service date. Neither needs a manager: the reason goes on the case's history,
+and the firm's managers receive a `case_revenue_moved` notification carrying
+it.
+
 ### Choosing a class
 
 Five alphanumerics. Postgres reserves classes beginning `A`–`H` for the SQL
