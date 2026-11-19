@@ -109,6 +109,13 @@
 -- case_revenue_date_for excludes it; everything else followed from the rule
 -- without further code. Verification e.
 --
+-- APPLIED to staging and production, 19 Nov 2026 (production at 16:38 UTC),
+-- from the file hashed 63108c3e, commit 856f3f2. ran_md5
+-- 3119fa67b6ca78bc469aea4999ae4d88 (74202 characters) on both — the file's
+-- text exactly, less the final newline the editor drops. Nothing above the
+-- verification block has changed since; this note and the verification
+-- result at the foot were added afterwards (db/README.md).
+--
 -- NOT SAFE TO RUN TWICE. ADD COLUMN and the DROP/CREATE of two functions
 -- whose signatures change would half-apply. The precondition refuses a
 -- second run, and says so.
@@ -971,8 +978,16 @@ COMMIT;
 -- Every line matched its expectation, except 6, which was 0 = 0 there; the
 -- backfill was then proved separately on the same rebuild — a case with a
 -- 'created' row got its creator, one without stayed null. Re-run after the
--- review's changes, with a-d added: every line matched again. NOT YET RUN ON
--- STAGING. Record its output here when it has been.
+-- review's changes, with a-d added: every line matched again.
+--
+-- RUN ON STAGING AND ON PRODUCTION, 19 Nov, after the migration: every line
+-- matched its expectation on both, and the two reports were identical. Line 6
+-- read 0 = 0 on both, and correctly: neither database had any cases (checked
+-- on production — cases 0, created_by 0). Production holds 2 'created'
+-- history rows, for cases since deleted as mistakes; delete_case keeps
+-- history, so there was nothing for the backfill to fill. The backfill
+-- itself is proved only on the scratch rebuild, where it was given a case
+-- with a created row.
 --
 -- DO $$
 -- DECLARE
