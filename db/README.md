@@ -1202,6 +1202,36 @@ result from the old block has already been recorded anywhere, the note says
 so: a verification output is only meaningful alongside the version of the
 block that produced it.
 
+### A database PR merges after production has run, never before
+
+**Main is always behind reality, never ahead of it.** A migration's pull
+request stays open through review, the staging run and the production run,
+and merges only when the person who wrote it has said on the PR that it is
+ready — which is after production.
+
+The reason is what the PR still has to carry after the run. The annotation
+("APPLIED to staging and production … ran_md5 …"), the verification result
+at the foot of the file, and the baseline in this README can only be written
+once both databases have run the file — and the README's own rule is that
+the baseline moves in the migration's own pull request. A PR merged before
+that has nowhere for them to go. Better the record trails the databases
+than describes something that does not exist yet.
+
+**What happened when it didn't (19 November).** the-hub#47 merged at 14:52
+UTC, before production ran it at 16:38. For two hours main described a
+change production did not have, and the two commits pushed after the run —
+the annotation of `20261119T1500` / `T1510` and the baseline after them —
+landed on a branch that had already merged. Nothing flagged it; they were
+found only because a later README edit failed against the old values, and
+were carried to main by the-hub#48.
+
+**To check for the same thing elsewhere**, compare every merged branch that
+still exists against its base: a branch with commits its base lacks has
+work that never arrived. Run on 19 November across both repositories, it
+found only those two. It cannot see a branch deleted after a late push —
+those commits are simply gone — which is one more reason the push has to
+come before the merge.
+
 ## A comment states what the code proves, not what you concluded
 
 Write what the code establishes. If you want to record what you concluded from
