@@ -18,6 +18,11 @@
 -- Safe to run twice: IF NOT EXISTS, and the ledger row is refreshed.
 --
 -- Requires: 019 (notification_event), 20261103T1200 (record_migration).
+--
+-- APPLIED to staging and production, 19 Nov 2026, from the file hashed
+-- a66fb812. ran_md5 8f4f5db9cf5f6dee5f1086328b1c457b (1594 characters) on
+-- both — the file's text exactly, less the final newline the editor drops.
+-- This note was added afterwards, outside the body (db/README.md).
 -- =============================================================================
 
 BEGIN;

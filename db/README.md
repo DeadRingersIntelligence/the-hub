@@ -314,23 +314,37 @@ case_need_type` made a `Y case_need_type` key appear, the count went 147 → 148
 and the rollback returned it to `968257c6…`. So `Y = 0` means no type carries
 a comment, not that the query cannot see one.
 
-### The baseline, 4 November 2026
+### The baseline, 19 November 2026
 
 All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
+**Last moved by `20261119T1800`**, run on both databases on 19 November and
+identical on both afterwards: `fn`, `acl` and `com` moved for its one new
+function, its grants and its comment, and nothing else did — as predicted
+before the queries were run. **Before that, by `20261119T1500` / `T1510`**,
+run on both databases on 19 November and identical on both afterwards. Seven rows moved and two did not,
+each for a reason the files account for: `typ` grew by exactly the 19
+characters of `,case_revenue_moved`; `trg` by the two new triggers; `col` by
+the two new columns; `con` by `created_by`'s foreign key and the booked-date
+index; `fn`, `acl` and `com` by the new and replaced functions, their grants
+and their comments, including the sentence added to `case_converted_notify`'s.
+`mig` and `defacl` are unchanged, correctly — no table, policy or default
+privilege changed. All nine were run as one query, each cell reduced to its
+md5 and length.
+
 | query | md5 | characters |
 |---|---|---|
-| `acl` | `78bb831ee336c4d76d6f0413ad626847` | 43533 |
-| `col` | `6bd6f01cda27cf51ce7d8ef2a7623dfd` | 76918 |
-| `com` | `968257c6b27b3f6c14c6e8d75630e9f0` | 7597 |
-| `con` | `ced2d050bcded68c18cf2e6e770a9d2b` | 50386 |
+| `acl` | `ee8f6367f8519d9900d856b9d4622142` | 44442 |
+| `col` | `02a3e69111b1c32f6813d652598e49c4` | 77025 |
+| `com` | `9885d2dc703e692ba47d3f3faea61003` | 8349 |
+| `con` | `e8ab294ac7fe127796b26c187060aa2a` | 50479 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `bc357a3bc042dac1234c2b4fb71c26ea` | 10911 |
+| `fn` | `fce040e8bb8e8d22889cd84224d85469` | 11876 |
 | `mig` | `579d28a007a83087596f1844a804f8ec` | 15850 |
-| `trg` | `087000700dea24395739dab7f52f3ef0` | 6543 |
-| `typ` | `a713741449e51c3fa3d8d84849289f5a` | 6467 |
+| `trg` | `4f6f23e045b4e57357eda3c9c8332868` | 6700 |
+| `typ` | `53df0c832893897ebc8d4cddd4ac5c8d` | 6486 |
 
 **A migration applied to both databases moves the baseline, and the migration
 that moved it updates this table in its own pull request.** Not later, and not
@@ -1187,6 +1201,36 @@ place, with a note in the file's header saying what changed and why. If a
 result from the old block has already been recorded anywhere, the note says
 so: a verification output is only meaningful alongside the version of the
 block that produced it.
+
+### A database PR merges after production has run, never before
+
+**Main is always behind reality, never ahead of it.** A migration's pull
+request stays open through review, the staging run and the production run,
+and merges only when the person who wrote it has said on the PR that it is
+ready — which is after production.
+
+The reason is what the PR still has to carry after the run. The annotation
+("APPLIED to staging and production … ran_md5 …"), the verification result
+at the foot of the file, and the baseline in this README can only be written
+once both databases have run the file — and the README's own rule is that
+the baseline moves in the migration's own pull request. A PR merged before
+that has nowhere for them to go. Better the record trails the databases
+than describes something that does not exist yet.
+
+**What happened when it didn't (19 November).** the-hub#47 merged at 14:52
+UTC, before production ran it at 16:38. For two hours main described a
+change production did not have, and the two commits pushed after the run —
+the annotation of `20261119T1500` / `T1510` and the baseline after them —
+landed on a branch that had already merged. Nothing flagged it; they were
+found only because a later README edit failed against the old values, and
+were carried to main by the-hub#48.
+
+**To check for the same thing elsewhere**, compare every merged branch that
+still exists against its base: a branch with commits its base lacks has
+work that never arrived. Run on 19 November across both repositories, it
+found only those two. It cannot see a branch deleted after a late push —
+those commits are simply gone — which is one more reason the push has to
+come before the merge.
 
 ## A comment states what the code proves, not what you concluded
 
