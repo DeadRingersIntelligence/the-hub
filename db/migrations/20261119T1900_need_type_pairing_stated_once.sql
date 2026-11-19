@@ -34,6 +34,14 @@
 -- with pg_get_functiondef() from a scratch database built from every
 -- migration on main, and only the lines above were changed.
 --
+-- REVIEWED 19 Nov (planning session) on commit 5432d83. Changed in answer:
+-- an unknown non-null need type now raises instead of returning null, which
+-- would have switched create_case_for_call's validation off for it. A null
+-- still returns null. Verification 5 shows the refusal is in the installed
+-- source; an actual fourth need type can't be added inside a verification
+-- block (ADD VALUE can't be used in its own transaction), so the raise was
+-- also exercised on the scratch rebuild with a real added value.
+--
 -- NOT SAFE TO RUN TWICE: the precondition refuses if the new function
 -- exists, and says so.
 --
@@ -70,16 +78,31 @@ END $$;
 -- -----------------------------------------------------------------------------
 -- 1. The rule
 -- -----------------------------------------------------------------------------
+-- AN UNKNOWN NEED TYPE REFUSES (review, 19 Nov). Without the ELSE, a fourth
+-- value added to case_need_type would return null here, create_case_for_call's
+-- `<>` would be null, its IF would not fire, and every case of the new type
+-- would be created with any status at all: the check would not fail, it would
+-- stop existing — on the one path that used to refuse. So a non-null value
+-- this function does not know raises, naming it. A NULL need type still
+-- returns null, which keeps this a pure refactor: a null passed before.
+-- plpgsql rather than sql only to be able to RAISE.
 CREATE FUNCTION decedent_status_for_need_type(p_need_type case_need_type, p_current decedent_status)
-RETURNS decedent_status LANGUAGE sql IMMUTABLE AS $$
-  SELECT CASE p_need_type
-           WHEN 'pre_need' THEN 'pre_need_subject'
-           WHEN 'imminent' THEN 'imminent'
-           -- at-need: someone who has died. Deceased already fits; keep it.
-           WHEN 'at_need'  THEN CASE WHEN p_current IN ('at_need', 'deceased') THEN p_current
-                                     ELSE 'at_need' END
-         END::decedent_status
-$$;
+RETURNS decedent_status LANGUAGE plpgsql IMMUTABLE AS $$
+BEGIN
+  IF p_need_type IS NULL THEN
+    RETURN NULL;
+  END IF;
+  CASE p_need_type
+    WHEN 'pre_need' THEN RETURN 'pre_need_subject';
+    WHEN 'imminent' THEN RETURN 'imminent';
+    -- at-need: someone who has died. Deceased already fits; keep it.
+    WHEN 'at_need'  THEN RETURN CASE WHEN p_current IN ('at_need', 'deceased') THEN p_current
+                                     ELSE 'at_need' END;
+    ELSE
+      RAISE EXCEPTION 'decedent_status_for_need_type doesn''t know the need type %', p_need_type
+        USING HINT = 'A new need type is added here, saying which decedent status goes with it. Until it is, cases of that type are refused rather than created unchecked.';
+  END CASE;
+END $$;
 
 COMMENT ON FUNCTION decedent_status_for_need_type(case_need_type, decedent_status) IS
   'THE pairing of need type and decedent status, stated once: pre_need -> '
@@ -88,7 +111,10 @@ COMMENT ON FUNCTION decedent_status_for_need_type(case_need_type, decedent_statu
   'type when this returns it unchanged. create_case_for_call validates '
   'against it; set_case_need_type derives a person''s new status from it and '
   'checks the person''s other cases with it. A new need type is added here '
-  'and nowhere else. Null need type returns null.';
+  'and nowhere else — and if someone forgets, it REFUSES rather than passes: '
+  'a non-null need type it does not handle raises, naming it, so cases of '
+  'that type are refused instead of created unchecked. A null need type '
+  'returns null, as the comparisons it replaced let a null through.';
 
 REVOKE ALL ON FUNCTION decedent_status_for_need_type(case_need_type, decedent_status) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION decedent_status_for_need_type(case_need_type, decedent_status) TO authenticated;
@@ -342,7 +368,7 @@ BEGIN
     INTO bad
     FROM (VALUES
     ('create_case_for_call(uuid,case_need_type,decedent_status,text,text,date,uuid,text,uuid[])', 'a7fe724b27a640ae91d0f58a15c5f82d'),
-    ('decedent_status_for_need_type(case_need_type,decedent_status)', 'e1eab95785f8cbf065720531b5f875b9'),
+    ('decedent_status_for_need_type(case_need_type,decedent_status)', 'daeec97ba1ae57dfc857220bdfd894ef'),
     ('set_case_need_type(uuid,case_need_type,uuid,date)', '4497b842eed7c61e49ba15c482b3a856')
          ) AS e(sig, want)
     LEFT JOIN pg_proc p ON p.oid = to_regprocedure(e.sig)
@@ -376,11 +402,15 @@ COMMIT;
 -- 1-3 evaluate the expressions this file removed beside the function that
 -- replaced them, for every input each use can see, and report whether they
 -- ever disagree. 4 reads the installed source to show the copies are gone.
+-- 5 is the review's: the function refuses a need type it does not handle.
 --
 -- RUN ON A SCRATCH REBUILD, 19 Nov — every migration on main, in order, with
 -- this file: every line matched. 20261119T1800's own verification block was
 -- then re-run against the rewritten set_case_need_type, and every line of
--- it matched too. NOT YET RUN ON STAGING.
+-- it matched too. After the review's change, all of that was run again and
+-- matched, and on the scratch database only a real fourth value was added to
+-- case_need_type: the function refused it, naming it, both called directly
+-- and through create_case_for_call's `<>` check. NOT YET RUN ON STAGING.
 --
 -- DO $$
 -- DECLARE
@@ -459,6 +489,19 @@ COMMIT;
 --          || ', by anon: '
 --          || has_function_privilege('anon', 'decedent_status_for_need_type(case_need_type,decedent_status)', 'EXECUTE')
 --          || '   (expect true, false)' || chr(10);
+--
+--   -- 5. Review: a need type the function doesn't know must refuse, not pass.
+--   --    No fourth value exists to call it with, so this reads the installed
+--   --    source; every value that does exist must get an answer. The search
+--   --    text has no apostrophe: in the stored source the message's "doesn't"
+--   --    is written doubled, so searching for it as typed never matches.
+--   r := r || '5. raises on a need type it doesn''t handle: '
+--          || (position('know the need type' IN (SELECT prosrc FROM pg_proc WHERE proname = 'decedent_status_for_need_type')) > 0)
+--          || ', every existing need type answered (none null): '
+--          || (NOT EXISTS (SELECT 1 FROM unnest(enum_range(NULL::case_need_type)) e
+--                           WHERE decedent_status_for_need_type(e, NULL) IS NULL))
+--          || ', null need type still null: ' || (decedent_status_for_need_type(NULL, 'at_need') IS NULL)
+--          || '   (expect true, true, true)' || chr(10);
 --
 --   RAISE EXCEPTION 'VERIFY 20261119T1900_need_type_pairing_stated_once (nothing to roll back) %', chr(10) || r;
 -- END $$;
