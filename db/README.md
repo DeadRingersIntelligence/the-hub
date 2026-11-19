@@ -320,8 +320,11 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261119T1500` / `T1510`**, run on both databases on 19
-November and identical on both afterwards. Seven rows moved and two did not,
+**Last moved by `20261119T1800`**, run on both databases on 19 November and
+identical on both afterwards: `fn`, `acl` and `com` moved for its one new
+function, its grants and its comment, and nothing else did — as predicted
+before the queries were run. **Before that, by `20261119T1500` / `T1510`**,
+run on both databases on 19 November and identical on both afterwards. Seven rows moved and two did not,
 each for a reason the files account for: `typ` grew by exactly the 19
 characters of `,case_revenue_moved`; `trg` by the two new triggers; `col` by
 the two new columns; `con` by `created_by`'s foreign key and the booked-date
@@ -333,12 +336,12 @@ md5 and length.
 
 | query | md5 | characters |
 |---|---|---|
-| `acl` | `258e36c0968ee58828426f5a13563c5b` | 44345 |
+| `acl` | `ee8f6367f8519d9900d856b9d4622142` | 44442 |
 | `col` | `02a3e69111b1c32f6813d652598e49c4` | 77025 |
-| `com` | `2dd24b678350534505a3065e125ac82b` | 8278 |
+| `com` | `9885d2dc703e692ba47d3f3faea61003` | 8349 |
 | `con` | `e8ab294ac7fe127796b26c187060aa2a` | 50479 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `2230409491fa946d2fd0d6aa84f33d85` | 11786 |
+| `fn` | `fce040e8bb8e8d22889cd84224d85469` | 11876 |
 | `mig` | `579d28a007a83087596f1844a804f8ec` | 15850 |
 | `trg` | `4f6f23e045b4e57357eda3c9c8332868` | 6700 |
 | `typ` | `53df0c832893897ebc8d4cddd4ac5c8d` | 6486 |
