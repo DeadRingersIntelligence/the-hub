@@ -81,6 +81,24 @@
 -- designed backstop. A BEFORE INSERT trigger fills it for new cases, so
 -- create_case_for_call()'s body is not replaced to do it.
 --
+-- REVIEWED 19 Nov (planning session), on commit 82b7351. Changed in answer:
+--   * the notification trigger asks the revenue rule whether its answer
+--     changed, instead of listing the moves it knew about. It now also fires
+--     on booked_service_date, and catches a passed booked date being moved, a
+--     served date confirmed in a different month, and a reinstatement;
+--   * when a change needs a reason is one function, case_change_needs_reason,
+--     used by all three writers and the trigger. set_case_booked_date gained
+--     it: a passed, unconfirmed booked date is the revenue date;
+--   * section 7 no longer claims "if it cannot notify, the change is refused".
+--     A failed insert rolls the change back; NO RECIPIENTS is zero rows and
+--     success, and the change_history row is then the only record. Said so
+--     there, and verification d proves it;
+--   * case_converted_notify's comment now points here, so nobody harmonises
+--     the two handlers.
+-- Left to Mandie: whether confirming in another month, or reinstating, should
+-- also need a reason. Both notify; neither needs one. The one place to change
+-- is case_change_needs_reason.
+--
 -- NOT SAFE TO RUN TWICE. ADD COLUMN and the DROP/CREATE of two functions
 -- whose signatures change would half-apply. The precondition refuses a
 -- second run, and says so.
@@ -283,6 +301,37 @@ COMMENT ON FUNCTION case_awaiting_confirmation(uuid) IS
   'Whether this case''s booked date has passed with nobody confirming the '
   'served date. What the bell asks, through my_cases_awaiting_confirmation().';
 
+-- When a change needs a reason, asked of the case before and after. Review of
+-- 19 Nov: the trigger and the three writers must not each enumerate the cases
+-- that move money; they ask the revenue rule whether its answer changed.
+--
+-- A reason is needed when the case counted as revenue and the change alters
+-- the date it counts on, or stops it counting — a loss after service, a
+-- served date changed or removed, a passed booked date moved — EXCEPT the
+-- first confirmation of a served date, which is the ordinary work the prompt
+-- asks for even when it lands in a different month from the booking.
+-- Reinstating needs none: the case did not count before. Both exceptions
+-- still NOTIFY (section 7); this decides only the reason. Which of them
+-- should also need a reason is Mandie's call, and this is the one place to
+-- change it.
+CREATE FUNCTION case_change_needs_reason(
+  p_old_status case_status, p_old_served date, p_old_booked date,
+  p_new_status case_status, p_new_served date, p_new_booked date)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT case_revenue_date_for(p_old_status, p_old_served, p_old_booked) IS NOT NULL
+     AND case_revenue_date_for(p_new_status, p_new_served, p_new_booked)
+           IS DISTINCT FROM case_revenue_date_for(p_old_status, p_old_served, p_old_booked)
+     AND NOT (p_old_served IS NULL AND p_new_served IS NOT NULL)
+$$;
+
+COMMENT ON FUNCTION case_change_needs_reason(case_status, date, date, case_status, date, date) IS
+  'THE reason rule: true when a case that counted as revenue would stop '
+  'counting or count on a different date, other than by first confirming its '
+  'served date. set_case_status, set_case_served and set_case_booked_date '
+  'raise RV001 when it is true and no reason was given; '
+  'case_revenue_moved_notify uses it to say "no reason recorded" when a '
+  'change that needed one arrived without.';
+
 -- The one place that says who is responsible. Replacing the creator with an
 -- assigned-to field (Mandie, 19 Nov) changes this function and nothing that
 -- notifies. "Still at the firm" means an unrevoked scope at the case's firm,
@@ -344,18 +393,35 @@ COMMENT ON FUNCTION my_cases_awaiting_confirmation() IS
 -- -----------------------------------------------------------------------------
 -- 4. Setting the booked date
 --
--- No reason and no manager. Booking a date is ordinary work; it affects
--- revenue only once it arrives, and then the confirmation prompt appears.
+-- No manager, ever. Booking a future date, or moving one that has not
+-- arrived, needs no reason: it is ordinary work and moves no money. Once a
+-- booked date has passed with nothing confirmed, that date IS the revenue
+-- date, and moving or clearing it moves money like changing a served date
+-- does — so then it needs a reason (review, 19 Nov), by the same rule.
 -- -----------------------------------------------------------------------------
-CREATE FUNCTION set_case_booked_date(p_case uuid, p_date date)
+CREATE FUNCTION set_case_booked_date(p_case uuid, p_date date, p_reason text DEFAULT NULL)
 RETURNS cases LANGUAGE plpgsql AS $$
-DECLARE a record; r cases; v_org uuid; v_was date;
+DECLARE
+  a record; r cases; v_org uuid; v_was date; v_status case_status; v_served date;
+  v_reason text;
 BEGIN
   SELECT * INTO a FROM hand_link_actor();
 
-  SELECT organization_id, booked_service_date INTO v_org, v_was
+  SELECT organization_id, booked_service_date, status, served_on
+    INTO v_org, v_was, v_status, v_served
     FROM cases WHERE id = p_case FOR UPDATE;
   IF v_org IS NULL THEN RAISE EXCEPTION 'no such case'; END IF;
+
+  v_reason := NULLIF(btrim(COALESCE(p_reason, '')), '');
+  IF v_reason IS NULL
+     AND case_change_needs_reason(v_status, v_served, v_was, v_status, v_served, p_date) THEN
+    RAISE EXCEPTION 'the booked date has passed, so this case counts as revenue on %; moving it needs a reason',
+      to_char(v_was, 'FMMonth FMDD, YYYY')
+      USING ERRCODE = 'RV001',
+            HINT = 'Say why — for example, the service was postponed. It goes on the case''s history and to your managers. Or confirm the date the service actually took place instead.';
+  END IF;
+
+  PERFORM set_config('hub.case_change_reason', COALESCE(v_reason, ''), true);
 
   UPDATE cases SET booked_service_date = p_date, updated_at = now()
    WHERE id = p_case
@@ -372,28 +438,34 @@ BEGIN
                          to_char(p_date, 'FMMonth FMDD, YYYY'))
            ELSE format('%s moved the booked service from %s to %s', a.v_name,
                        to_char(v_was, 'FMMonth FMDD, YYYY'),
-                       to_char(p_date, 'FMMonth FMDD, YYYY')) END,
+                       to_char(p_date, 'FMMonth FMDD, YYYY')) END
+        || COALESCE(': ' || v_reason, ''),
       a.v_user,
-      jsonb_build_object('field', 'booked_service_date', 'from', v_was, 'to', p_date));
+      jsonb_build_object('field', 'booked_service_date', 'from', v_was, 'to', p_date,
+                         'reason', v_reason));
   END IF;
 
   RETURN r;
 END $$;
 
-COMMENT ON FUNCTION set_case_booked_date(uuid, date) IS
+COMMENT ON FUNCTION set_case_booked_date(uuid, date, text) IS
   'Sets or clears the date a service is booked for — the only writer of '
-  'cases.booked_service_date. Any date, past or future; no reason and no '
-  'manager. Records a history row when the date changes. Once the date '
-  'arrives the case counts as revenue on it until someone confirms '
-  'served_on.';
+  'cases.booked_service_date. Any date, past or future; never a manager. '
+  'Needs a reason (RV001 without one) only when the booked date has passed '
+  'unconfirmed — it is then the revenue date, and moving it moves money '
+  '(case_change_needs_reason). Records a history row when the date changes. '
+  'Once the date arrives the case counts as revenue on it until someone '
+  'confirms served_on.';
 
 -- -----------------------------------------------------------------------------
 -- 5. set_case_served, replaced
 --
 -- Same signature, so CREATE OR REPLACE keeps its grants. What changed:
---   * removing a date no longer needs a manager; it still needs a reason;
---   * changing a recorded date to another one now needs a reason too;
---   * the first date recorded — the confirmation — needs neither;
+--   * no manager, ever;
+--   * a reason when the change moves revenue (case_change_needs_reason):
+--     changing or removing a recorded date that the case counts on. The
+--     first date recorded — the confirmation — needs none, even when it lands
+--     in a different month from the booking; the managers are still told;
 --   * the reason is handed to the notification trigger (hub.case_change_reason).
 -- The future-date refusal stays, and its hint now points at the booked date.
 --
@@ -404,15 +476,18 @@ COMMENT ON FUNCTION set_case_booked_date(uuid, date) IS
 CREATE OR REPLACE FUNCTION set_case_served(
   p_case uuid,
   p_served_on date DEFAULT current_date,
-  -- Required to CHANGE or REMOVE a recorded date. Recording the first one —
-  -- confirming — needs none.
+  -- Required when changing or removing a recorded date moves revenue.
+  -- Recording the first one — confirming — needs none.
   p_reason text DEFAULT NULL)
 RETURNS cases LANGUAGE plpgsql AS $$
-DECLARE a record; r cases; v_org uuid; v_was date; v_reason text;
+DECLARE
+  a record; r cases; v_org uuid; v_was date; v_reason text;
+  v_status case_status; v_booked date;
 BEGIN
   SELECT * INTO a FROM hand_link_actor();
 
-  SELECT organization_id, served_on INTO v_org, v_was
+  SELECT organization_id, served_on, status, booked_service_date
+    INTO v_org, v_was, v_status, v_booked
     FROM cases WHERE id = p_case FOR UPDATE;
   IF v_org IS NULL THEN RAISE EXCEPTION 'no such case'; END IF;
 
@@ -425,7 +500,8 @@ BEGIN
 
   -- Changing or removing a recorded date can move revenue between months, so
   -- it needs a reason. Nobody needs to be a manager: the managers are told.
-  IF v_was IS NOT NULL AND p_served_on IS DISTINCT FROM v_was AND v_reason IS NULL THEN
+  IF v_reason IS NULL
+     AND case_change_needs_reason(v_status, v_was, v_booked, v_status, p_served_on, v_booked) THEN
     RAISE EXCEPTION '%',
       CASE WHEN p_served_on IS NULL THEN 'removing a service date needs a reason'
            ELSE 'changing a service date needs a reason' END
@@ -462,12 +538,12 @@ END $$;
 COMMENT ON FUNCTION set_case_served(uuid, date, text) IS
   'Records the date a person confirmed the family was served — the only '
   'writer of cases.served_on. Recording the first date needs no reason. '
-  'CHANGING or REMOVING a recorded date needs a non-blank reason (RV001 '
-  'without one), written into the history row and into the '
-  'case_revenue_moved notification each manager receives; it does NOT need a '
-  'manager (20261119T1510 removed that gate). Removing a date un-confirms: a '
-  'case whose booked date has passed counts on that date again. Refuses a '
-  'future date.';
+  'CHANGING or REMOVING a recorded date that the case counts on needs a '
+  'non-blank reason (RV001 without one; case_change_needs_reason), written '
+  'into the history row and into the case_revenue_moved notification each '
+  'manager receives; it does NOT need a manager (20261119T1510 removed that '
+  'gate). Removing a date un-confirms: a case whose booked date has passed '
+  'counts on that date again. Refuses a future date.';
 
 -- -----------------------------------------------------------------------------
 -- 6. set_case_status and set_case_lost, with a reason
@@ -490,7 +566,7 @@ DECLARE
   a record; r cases;
   v_org uuid; v_was case_status; v_was_item uuid; v_was_label text;
   v_outcome case_status; v_label text; v_served date; v_booked date;
-  v_reason text; v_revenue date;
+  v_reason text;
 BEGIN
   SELECT * INTO a FROM hand_link_actor();
 
@@ -515,12 +591,12 @@ BEGIN
   -- A case that counts as revenue can be lost — the family disputed, the
   -- firm comped the service — but it takes money out of a month that may be
   -- closed, so it needs a reason, and the managers are told. Losing a case
-  -- that was never revenue needs neither.
-  v_revenue := case_revenue_date_for(v_was, v_served, v_booked);
-  IF v_outcome = 'lost' AND v_was IS DISTINCT FROM 'lost'
-     AND v_revenue IS NOT NULL AND v_reason IS NULL THEN
+  -- that was never revenue needs neither; reinstating needs none either, and
+  -- is still told to the managers.
+  IF v_reason IS NULL
+     AND case_change_needs_reason(v_was, v_served, v_booked, v_outcome, v_served, v_booked) THEN
     RAISE EXCEPTION 'this case counts as revenue on %, so marking it lost needs a reason',
-      to_char(v_revenue, 'FMMonth FMDD, YYYY')
+      to_char(case_revenue_date_for(v_was, v_served, v_booked), 'FMMonth FMDD, YYYY')
       USING ERRCODE = 'RV001',
             HINT = 'Say why — for example, the family disputed the bill and the services were comped. It goes on the case''s history and to your managers.';
   END IF;
@@ -588,30 +664,47 @@ COMMENT ON FUNCTION set_case_lost(uuid, boolean, text) IS
 -- -----------------------------------------------------------------------------
 -- 7. The managers are told when money moves
 --
--- Fires on the row, so every door is covered, including a direct UPDATE that
--- went round the functions. Two kinds of move, one event:
---   * a case that counted as revenue (judged on OLD) becomes lost;
---   * a recorded served_on is changed or removed.
--- Not notified, by design or by omission — named so a reviewer can rule:
---   * reinstating a lost case (money coming back);
---   * changing a booked date that has already passed, which moves revenue
---     between months the same way changing a served date does. The planning
---     note made the booked date ungated; this follows it.
+-- ONE CONDITION: did the revenue rule's answer change between OLD and NEW?
+-- An earlier draft enumerated the cases (lost after counting, a served date
+-- changed or removed) and missed three the rule catches without being told
+-- about them (review, 19 Nov):
+--   * a passed booked date moved — the trigger did not even fire on
+--     booked_service_date;
+--   * confirming a served date in a different month from the booking;
+--   * reinstating a lost case — money coming back, which a manager told it
+--     left should be told it returned.
+-- So it fires on all three columns the rule reads, and asks the rule.
+-- Changes that leave the revenue date where it was notify nobody: a served
+-- date confirmed as the booked date, a future booking moved, on hold.
+--
+-- WHETHER A REASON WAS NEEDED is case_change_needs_reason(). When one was
+-- needed and none arrived, the change went round the functions (a direct
+-- UPDATE), and the body says "no reason recorded". When none was needed — a
+-- confirmation, a reinstatement — the body simply has no reason clause.
 --
 -- To the firm's managers (case_notification_recipients), not to the person
--- responsible for the case — the first notification whose audience is the
--- firm rather than the case. Not to whoever made the change.
+-- responsible for the case, and not to whoever made the change.
 --
--- NOT GATED BY notification_preferences, unlike case_converted. Visibility is
--- the control that replaced the manager gate; an opt-in control is one that is
--- off for everyone until they find a setting (an absent preference row means
--- off). Reviewer to confirm.
+-- NOT GATED BY notification_preferences, unlike case_converted.
+-- case_notification_recipients() does not filter on preferences; the EXISTS
+-- lives in case_converted_notify alone (confirmed in review). Visibility is
+-- the control that replaced the manager gate, and an opt-in control is off
+-- for everyone until they find a setting. IF SETTINGS EVER LISTS THIS EVENT,
+-- it must show it as not switchable, or the toggle lies.
 --
--- NO warn-and-continue handler, unlike case_converted_notify (20261102T1600).
--- That one is a courtesy and must not veto a conversion. This one IS the
--- control: if it cannot notify, the change it reports should not go through
--- unreported. Reviewer to confirm — the cost is that a fault here stops a
--- director recording a loss.
+-- WHAT THE CONTROL DOES AND DOES NOT GUARANTEE. No warn-and-continue
+-- handler, deliberately, unlike case_converted_notify (20261102T1600), whose
+-- comment points back here: that one is a courtesy and must not veto a
+-- conversion; this one is the control. So if the INSERT FAILS, the change
+-- rolls back with it. But an insert that finds NO RECIPIENTS succeeds with
+-- zero rows, and the change goes through having told nobody — a firm with no
+-- owner or manager yet, a one-manager firm whose manager made the change, and
+-- every firm whose only users are internal (case_notification_recipients
+-- excludes Dead Ringers staff; the Deadringers Test Account is one). That is
+-- intended: a firm without managers must still be able to record a loss.
+-- THE DURABLE RECORD IN EVERY CASE IS THE change_history ROW, with its
+-- reason, which the writing functions always write. Rely on that, not on the
+-- notification having reached someone.
 --
 -- SECURITY DEFINER because nobody else can insert into notifications. The
 -- body is composed from the case's own rows, the actor's name and the reason;
@@ -621,17 +714,12 @@ COMMENT ON FUNCTION set_case_lost(uuid, boolean, text) IS
 CREATE FUNCTION case_revenue_moved_notify() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE
-  v_lost boolean; v_date_moved boolean;
-  v_was_revenue date; v_family text; v_actor_id uuid; v_actor text;
-  v_reason text; v_case_words text; v_what text; v_body text;
+  v_old date; v_new date; v_family text; v_actor_id uuid; v_actor text;
+  v_reason text; v_case_words text; v_what text; v_money text; v_why text;
 BEGIN
-  v_was_revenue := case_revenue_date_for(OLD.status, OLD.served_on, OLD.booked_service_date);
-  v_lost := NEW.status = 'lost' AND OLD.status IS DISTINCT FROM 'lost'
-            AND v_was_revenue IS NOT NULL;
-  v_date_moved := OLD.served_on IS NOT NULL
-                  AND NEW.served_on IS DISTINCT FROM OLD.served_on;
-
-  IF NOT (v_lost OR v_date_moved) THEN RETURN NULL; END IF;
+  v_old := case_revenue_date_for(OLD.status, OLD.served_on, OLD.booked_service_date);
+  v_new := case_revenue_date_for(NEW.status, NEW.served_on, NEW.booked_service_date);
+  IF v_old IS NOT DISTINCT FROM v_new THEN RETURN NULL; END IF;
 
   SELECT d.last_name INTO v_family
     FROM case_decedents cd JOIN decedents d ON d.id = cd.decedent_id
@@ -646,25 +734,59 @@ BEGIN
   -- decedent has a last name yet.
   v_case_words := COALESCE('the ' || v_family || ' family''s case', 'a case with no family name');
 
+  -- What was done. Several columns can change in one UPDATE; the first that
+  -- applies names it, and the money clause below says what it did to revenue
+  -- whichever it was.
   v_what := CASE
-    WHEN v_lost THEN format('marked %s lost after it had counted as revenue on %s',
-                            v_case_words, to_char(v_was_revenue, 'FMMon FMDD, YYYY'))
-    WHEN NEW.served_on IS NULL THEN format('removed the service date (%s) from %s',
-                            to_char(OLD.served_on, 'FMMon FMDD, YYYY'), v_case_words)
-    ELSE format('changed the service date on %s from %s to %s', v_case_words,
-                to_char(OLD.served_on, 'FMMon FMDD, YYYY'),
-                to_char(NEW.served_on, 'FMMon FMDD, YYYY'))
+    WHEN NEW.status = 'lost' AND OLD.status IS DISTINCT FROM 'lost'
+      THEN format('marked %s lost', v_case_words)
+    WHEN OLD.status = 'lost' AND NEW.status IS DISTINCT FROM 'lost'
+      THEN format('reinstated %s', v_case_words)
+    WHEN OLD.served_on IS NULL AND NEW.served_on IS NOT NULL
+      THEN format('confirmed %s as served on %s', v_case_words,
+                  to_char(NEW.served_on, 'FMMon FMDD, YYYY'))
+    WHEN OLD.served_on IS NOT NULL AND NEW.served_on IS NULL
+      THEN format('removed the service date (%s) from %s',
+                  to_char(OLD.served_on, 'FMMon FMDD, YYYY'), v_case_words)
+    WHEN NEW.served_on IS DISTINCT FROM OLD.served_on
+      THEN format('changed the service date on %s from %s to %s', v_case_words,
+                  to_char(OLD.served_on, 'FMMon FMDD, YYYY'),
+                  to_char(NEW.served_on, 'FMMon FMDD, YYYY'))
+    WHEN NEW.booked_service_date IS NULL
+      THEN format('cleared the booked service date (%s) on %s',
+                  to_char(OLD.booked_service_date, 'FMMon FMDD, YYYY'), v_case_words)
+    WHEN OLD.booked_service_date IS NULL
+      THEN format('booked the service on %s for %s', v_case_words,
+                  to_char(NEW.booked_service_date, 'FMMon FMDD, YYYY'))
+    ELSE format('moved the booked service on %s from %s to %s', v_case_words,
+                to_char(OLD.booked_service_date, 'FMMon FMDD, YYYY'),
+                to_char(NEW.booked_service_date, 'FMMon FMDD, YYYY'))
   END;
 
-  v_body := COALESCE(v_actor, 'Someone') || ' ' || v_what
-            || COALESCE(': ' || v_reason, ' — no reason recorded');
+  v_money := CASE
+    WHEN v_new IS NULL THEN format('it no longer counts as revenue (it counted on %s)',
+                                   to_char(v_old, 'FMMon FMDD, YYYY'))
+    WHEN v_old IS NULL THEN format('it now counts as revenue on %s',
+                                   to_char(v_new, 'FMMon FMDD, YYYY'))
+    ELSE format('its revenue moved from %s to %s',
+                to_char(v_old, 'FMMon FMDD, YYYY'), to_char(v_new, 'FMMon FMDD, YYYY'))
+  END;
+
+  v_why := CASE
+    WHEN v_reason IS NOT NULL THEN '. Reason: ' || v_reason
+    WHEN case_change_needs_reason(OLD.status, OLD.served_on, OLD.booked_service_date,
+                                  NEW.status, NEW.served_on, NEW.booked_service_date)
+      THEN '. No reason recorded'
+    ELSE ''
+  END;
 
   INSERT INTO notifications
     (organization_id, user_id, event, subject_entity, subject_id, body)
   SELECT NEW.organization_id, r.user_id,
          'case_revenue_moved'::notification_event,
          'case'::history_entity,
-         NEW.id, v_body
+         NEW.id,
+         COALESCE(v_actor, 'Someone') || ' ' || v_what || ' — ' || v_money || v_why
     FROM case_notification_recipients(NEW.organization_id) r
    WHERE r.user_id IS DISTINCT FROM v_actor_id;
 
@@ -672,19 +794,42 @@ BEGIN
 END $$;
 
 COMMENT ON FUNCTION case_revenue_moved_notify() IS
-  'Tells a firm''s managers when money moves on a case that has counted as '
-  'revenue: a case marked lost after counting, or a recorded service date '
-  'changed or removed. One case_revenue_moved notification per manager, not '
-  'to the person who made the change, with the reason in the body (or "no '
-  'reason recorded" for a change that went round the functions). Fires on '
-  'the row, so a direct UPDATE is reported too. Not gated by preferences, and '
-  'does not warn-and-continue: this notification is the control that replaced '
-  'the manager gate. SECURITY DEFINER because only the Hub inserts '
-  'notifications; a trigger, so there is no grantable entry point to it.';
+  'Tells a firm''s managers when a case''s revenue date changes '
+  '(case_revenue_date_for, OLD against NEW): lost after counting, '
+  'reinstated, a served date confirmed in another month, changed or removed, '
+  'a passed booked date moved. One case_revenue_moved notification per '
+  'manager, not to whoever made the change, carrying the reason, or "No '
+  'reason recorded" when one was needed (case_change_needs_reason) and none '
+  'came — a change that went round the functions. Not gated by preferences. '
+  'No warn-and-continue, unlike case_converted_notify, deliberately: an '
+  'insert that FAILS rolls the change back. But NO RECIPIENTS is zero rows '
+  'and success — a firm with no managers, or only internal users, is told '
+  'nothing — and the durable record is then the change_history row and its '
+  'reason. SECURITY DEFINER because only the Hub inserts notifications; a '
+  'trigger, so there is no grantable entry point to it.';
 
 CREATE TRIGGER cases_revenue_moved_t
-  AFTER UPDATE OF status, served_on ON cases
+  AFTER UPDATE OF status, served_on, booked_service_date ON cases
   FOR EACH ROW EXECUTE FUNCTION case_revenue_moved_notify();
+
+-- The opposite number points back, so nobody harmonises the two (review,
+-- 19 Nov). Comment only; case_converted_notify's body is untouched. The text
+-- is 20261102T1600's, with the last two sentences added.
+COMMENT ON FUNCTION case_converted_notify() IS
+  'Tells a firm''s managers that a case was created, since creating one is '
+  'ungated and visibility is what they were given instead of control. On '
+  'case_decedents, not cases: 057 inserts the case first, so a trigger on '
+  'cases cannot name the family. Fires for a case''s first decedent only, '
+  'skips the person who created it, and respects each manager''s desktop '
+  'preference — an absent row is off. SECURITY DEFINER because '
+  'notification_preferences is self-only under RLS and the converter would '
+  'see no preference but their own; the work sits in the trigger function '
+  'rather than a helper so that there is no grantable entry point to it. '
+  'WARNS AND CONTINUES: a notification must never be able to stop a case '
+  'being created, so anything that fails inside becomes a WARNING in the '
+  'Postgres log and the conversion goes through without one. Nothing watches '
+  'that log. case_revenue_moved_notify (20261119T1510) deliberately does the '
+  'opposite: it is a control, not a courtesy. Do not harmonise them.';
 
 -- -----------------------------------------------------------------------------
 -- 8. Grants: the explicit pair on every callable function, nothing on the
@@ -702,8 +847,10 @@ REVOKE ALL ON FUNCTION case_responsible_users(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION case_responsible_users(uuid) TO authenticated;
 REVOKE ALL ON FUNCTION my_cases_awaiting_confirmation() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION my_cases_awaiting_confirmation() TO authenticated;
-REVOKE ALL ON FUNCTION set_case_booked_date(uuid, date) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION set_case_booked_date(uuid, date) TO authenticated;
+REVOKE ALL ON FUNCTION case_change_needs_reason(case_status, date, date, case_status, date, date) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION case_change_needs_reason(case_status, date, date, case_status, date, date) TO authenticated;
+REVOKE ALL ON FUNCTION set_case_booked_date(uuid, date, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION set_case_booked_date(uuid, date, text) TO authenticated;
 REVOKE ALL ON FUNCTION set_case_served(uuid, date, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION set_case_served(uuid, date, text) TO authenticated;
 REVOKE ALL ON FUNCTION set_case_status(uuid, uuid, text) FROM PUBLIC, anon;
@@ -731,18 +878,19 @@ BEGIN
   SELECT string_agg(e.sig || ' is ' || COALESCE(md5(p.prosrc), 'MISSING'), '; ')
     INTO bad
     FROM (VALUES
-    ('set_case_served(uuid,date,text)', '1511ff4bc7599c9bd53b3536b804ff3a'),
-    ('cases_set_created_by()', '8f293d32fd2b62aa31bf8608c6b5c68e'),
-    ('case_revenue_date_for(case_status,date,date)', 'f5e6ffad9e68bf7fc259e9779ed60168'),
-    ('case_revenue_date(uuid)', '54e85d7ed7f6ead928636461da927086'),
-    ('case_awaiting_confirmation_for(case_status,date,date)', '50fce56072199434dc99748c818d3f9b'),
     ('case_awaiting_confirmation(uuid)', '9e477169ce058370a9022a37be9e9215'),
+    ('case_awaiting_confirmation_for(case_status,date,date)', '50fce56072199434dc99748c818d3f9b'),
+    ('case_change_needs_reason(case_status,date,date,case_status,date,date)', '8f4f4e604fc7d3793b2b66e8dbcff1fd'),
     ('case_responsible_users(uuid)', '49fe944846e63306fd926e9776b50bc3'),
+    ('case_revenue_date(uuid)', '54e85d7ed7f6ead928636461da927086'),
+    ('case_revenue_date_for(case_status,date,date)', 'f5e6ffad9e68bf7fc259e9779ed60168'),
+    ('case_revenue_moved_notify()', 'e235a9d7ae9737c0cee8c86e465c6e83'),
+    ('cases_set_created_by()', '8f293d32fd2b62aa31bf8608c6b5c68e'),
     ('my_cases_awaiting_confirmation()', '2c6ca6d8a9b2a7e5df786116114826b2'),
-    ('set_case_booked_date(uuid,date)', '069c52153b8eff7cef7735dd4ddb5f0e'),
-    ('set_case_status(uuid,uuid,text)', 'dab3688e7582e6a306d35a7faeb96b04'),
+    ('set_case_booked_date(uuid,date,text)', 'a5020b1f29616aa9c32ffacf2efea1f1'),
     ('set_case_lost(uuid,boolean,text)', 'f2d2191da56c84bd09cfdb6898731910'),
-    ('case_revenue_moved_notify()', 'f053c3a5e9efb481d61e8c2508022170')
+    ('set_case_served(uuid,date,text)', 'fdf0093badeda31b9e50e656ad4cebf3'),
+    ('set_case_status(uuid,uuid,text)', '75d70bec087b6f70f2dcf2ba64b9f5fa')
          ) AS e(sig, want)
     LEFT JOIN pg_proc p ON p.oid = to_regprocedure(e.sig)
    WHERE md5(p.prosrc) IS DISTINCT FROM e.want;
@@ -781,8 +929,10 @@ COMMIT;
 -- case_converted too, and an earlier draft of this block counted that as a
 -- revenue notification.
 --
--- The planning session's eight checks are numbered 1-8; the unnumbered lines
--- are added positive halves and the things the design named as unchanged.
+-- The planning session's eight checks are numbered 1-8; a-d are the review's
+-- (a passed booked date moved, a confirmation in another month, a
+-- reinstatement, a firm with nobody to notify); the unnumbered lines are
+-- added positive halves and the things the design named as unchanged.
 -- Line 6 compares counts BEFORE the fixture exists, and says when both are
 -- zero, because then it proves nothing.
 --
@@ -794,7 +944,8 @@ COMMIT;
 -- 20261103T2100 skipped (it refuses on a database that has 014, by design).
 -- Every line matched its expectation, except 6, which was 0 = 0 there; the
 -- backfill was then proved separately on the same rebuild — a case with a
--- 'created' row got its creator, one without stayed null. NOT YET RUN ON
+-- 'created' row got its creator, one without stayed null. Re-run after the
+-- review's changes, with a-d added: every line matched again. NOT YET RUN ON
 -- STAGING. Record its output here when it has been.
 --
 -- DO $$
@@ -803,6 +954,7 @@ COMMIT;
 --   v_org uuid; v_dir uuid; v_mgr uuid; v_oth uuid;
 --   a_dir uuid := gen_random_uuid(); a_mgr uuid := gen_random_uuid(); a_oth uuid := gen_random_uuid();
 --   c_future uuid; c_past uuid; c_served uuid; c_served2 uuid; c_unserved uuid; c_new uuid;
+--   c_conf uuid; c_book uuid; c_solo uuid; v_org2 uuid; v_solo uuid; a_solo uuid := gen_random_uuid();
 --   v_dec uuid; n_hist int; n_set int; n_mgr int;
 -- BEGIN
 --   PERFORM set_config('app.is_internal', 'on', true);
@@ -854,8 +1006,23 @@ COMMIT;
 --   VALUES (v_org, 'at_need', v_dir, t - 5) RETURNING id INTO c_served2;
 --   INSERT INTO cases (organization_id, need_type, created_by)
 --   VALUES (v_org, 'at_need', v_dir) RETURNING id INTO c_unserved;
+--   INSERT INTO cases (organization_id, need_type, created_by, booked_service_date)
+--   VALUES (v_org, 'at_need', v_dir, t - 4) RETURNING id INTO c_conf;
+--   INSERT INTO cases (organization_id, need_type, created_by)
+--   VALUES (v_org, 'pre_need', v_dir) RETURNING id INTO c_book;
 --   UPDATE cases SET status_item_id = case_status_default(v_org, 'active')
---    WHERE id IN (c_future, c_past, c_served, c_served2, c_unserved);
+--    WHERE id IN (c_future, c_past, c_served, c_served2, c_unserved, c_conf, c_book);
+--
+--   -- A second firm whose only user is a professional: nobody to notify.
+--   INSERT INTO organizations (name, client_type)
+--   VALUES ('ZZZ No Managers', 'funeral_home') RETURNING id INTO v_org2;
+--   INSERT INTO users (email, full_name, auth_user_id, active_organization_id)
+--   VALUES ('zzz-solo@example.invalid', 'ZZZ Solo', a_solo, v_org2) RETURNING id INTO v_solo;
+--   INSERT INTO user_scopes (user_id, scope_type, view_profile, organization_id)
+--   VALUES (v_solo, 'organization', 'professional', v_org2);
+--   INSERT INTO cases (organization_id, need_type, created_by, served_on, status_item_id)
+--   VALUES (v_org2, 'at_need', v_solo, t - 5, case_status_default(v_org2, 'active'))
+--   RETURNING id INTO c_solo;
 --
 --   -- ---- the rules, as the owner -------------------------------------------
 --   r := r || '1. future booked, unserved — revenue date: '
@@ -889,7 +1056,7 @@ COMMIT;
 --   r := r || '   direct UPDATE changing a served date — manager notified: '
 --          || ((SELECT count(*) FROM notifications WHERE user_id = v_mgr AND event = 'case_revenue_moved') - n)
 --          || ', body: ' || COALESCE((SELECT body FROM notifications WHERE user_id = v_mgr AND event = 'case_revenue_moved' AND subject_id = c_served2 LIMIT 1), 'NONE')
---          || '   (expect 1, ending "no reason recorded")' || chr(10);
+--          || '   (expect 1, ending ". No reason recorded")' || chr(10);
 --
 --   -- ---- as the director: an ordinary, non-manager user ---------------------
 --   PERFORM set_config('app.is_internal', 'off', true);
@@ -988,15 +1155,69 @@ COMMIT;
 --            || CASE WHEN SQLERRM LIKE '%future%' THEN '   (right reason)' ELSE '   (WRONG REASON)' END || chr(10);
 --   END;
 --   BEGIN
---     PERFORM set_case_booked_date(c_future, t + 30);
---     r := r || '   a FUTURE booked date, as a non-manager: allowed' || chr(10);
+--     PERFORM set_case_booked_date(c_book, t + 30);
+--     r := r || '   a FUTURE booked date, as a non-manager, no reason: allowed' || chr(10);
 --   EXCEPTION WHEN others THEN
 --     r := r || '   a future booked date: REFUSED (BAD): ' || SQLERRM || chr(10);
 --   END;
 --   PERFORM set_config('role', 'postgres', true);
---   r := r || '   notifications for the unserved loss, the confirmation and the booking: '
---          || (SELECT count(*) FROM notifications WHERE subject_id IN (c_unserved, c_past, c_future) AND event = 'case_revenue_moved')
---          || '   (expect 0)' || chr(10);
+--   r := r || '   notifications for the unserved loss, the same-date confirmation and the future booking: '
+--          || (SELECT count(*) FROM notifications WHERE subject_id IN (c_unserved, c_past, c_book) AND event = 'case_revenue_moved')
+--          || '   (expect 0 — none of them moved a revenue date)' || chr(10);
+--   PERFORM set_config('role', 'authenticated', true);
+--
+--   -- ---- review of 19 Nov: the moves the first draft missed -----------------
+--   -- (a) A passed booked date IS the revenue date: moving it needs a reason.
+--   BEGIN
+--     PERFORM set_case_booked_date(c_future, t + 30);
+--     r := r || 'a. moving a PASSED booked date without a reason: ALLOWED (BAD)' || chr(10);
+--   EXCEPTION WHEN others THEN
+--     r := r || 'a. moving a passed booked date without a reason refused: ' || SQLERRM || ' [' || SQLSTATE || ']'
+--            || CASE WHEN SQLSTATE = 'RV001' AND SQLERRM LIKE '%booked date has passed%' THEN '   (right reason)'
+--                    ELSE '   (WRONG REASON)' END || chr(10);
+--   END;
+--   BEGIN
+--     PERFORM set_case_booked_date(c_future, t + 30, 'ZZZ service postponed');
+--     r := r || '   with a reason: allowed' || chr(10);
+--   EXCEPTION WHEN others THEN
+--     r := r || '   with a reason: REFUSED (BAD): ' || SQLERRM || chr(10);
+--   END;
+--   -- (b) Confirming in a different month from the booking: no reason, but told.
+--   BEGIN
+--     PERFORM set_case_served(c_conf, t - 2);
+--     r := r || 'b. confirming a served date different from the booking, no reason: allowed' || chr(10);
+--   EXCEPTION WHEN others THEN
+--     r := r || 'b. confirming a different date: REFUSED (BAD): ' || SQLERRM || chr(10);
+--   END;
+--   -- Reinstating: money coming back. No reason, but told.
+--   BEGIN
+--     PERFORM set_case_lost(c_served, false);
+--     r := r || 'c. reinstating a lost served case, no reason: allowed' || chr(10);
+--   EXCEPTION WHEN others THEN
+--     r := r || 'c. reinstating: REFUSED (BAD): ' || SQLERRM || chr(10);
+--   END;
+--   PERFORM set_config('role', 'postgres', true);
+--   r := r || '   manager told — a: '
+--          || COALESCE((SELECT body FROM notifications WHERE user_id = v_mgr AND subject_id = c_future AND event = 'case_revenue_moved' AND body LIKE '%Reason:%' LIMIT 1), 'NOTHING (BAD)') || chr(10)
+--          || '   b: ' || COALESCE((SELECT body FROM notifications WHERE user_id = v_mgr AND subject_id = c_conf AND event = 'case_revenue_moved' LIMIT 1), 'NOTHING (BAD)') || chr(10)
+--          || '   c: ' || COALESCE((SELECT body FROM notifications WHERE user_id = v_mgr AND subject_id = c_served AND event = 'case_revenue_moved' AND body LIKE '%reinstated%' LIMIT 1), 'NOTHING (BAD)') || chr(10)
+--          || '   (expect a: moved booked, no longer counts, Reason: postponed — the fixture''s own earlier move of this booking into the past notified too, without a reason clause, because it did not need one; b: confirmed, revenue moved '
+--          || (t - 4) || ' to ' || (t - 2) || ', no reason clause; c: reinstated, now counts again, no reason clause)' || chr(10);
+--
+--   -- No recipients: the change still goes through, the history row is the record.
+--   PERFORM set_config('request.jwt.claims', json_build_object('sub', a_solo::text)::text, true);
+--   PERFORM set_config('role', 'authenticated', true);
+--   BEGIN
+--     PERFORM set_case_lost(c_solo, true, 'ZZZ comped, no managers here');
+--     r := r || 'd. a firm with no managers marks a served case lost: allowed' || chr(10);
+--   EXCEPTION WHEN others THEN
+--     r := r || 'd. a firm with no managers: REFUSED (BAD — a firm without managers must still record a loss): ' || SQLERRM || chr(10);
+--   END;
+--   PERFORM set_config('role', 'postgres', true);
+--   r := r || '   notifications written: ' || (SELECT count(*) FROM notifications WHERE subject_id = c_solo)
+--          || ', history row: ' || COALESCE((SELECT summary FROM change_history WHERE entity = 'case' AND entity_id = c_solo AND detail->>'field' = 'status' LIMIT 1), 'NONE (BAD)')
+--          || '   (expect 0, and the reason on the history row)' || chr(10);
+--   PERFORM set_config('request.jwt.claims', json_build_object('sub', a_dir::text)::text, true);
 --   PERFORM set_config('role', 'authenticated', true);
 --
 --   -- A case the director creates names them.

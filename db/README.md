@@ -96,8 +96,13 @@ Before calling a mismatch drift, rule out four innocent causes:
   changes `sha256` and must not change `ran_md5`. This is the common one.
 - **CRLF against LF**, if the file crossed machines between the two applies.
 - **A file with more than one transaction block** — the `ALTER TYPE … ADD VALUE`
-  case — records only the block that called `record_migration`. Such a file
-  should call it in each block and name the block in `note`.
+  case — records only its LAST block, whatever it does. `schema_migrations`
+  keeps one row per filename and `record_migration` overwrites `ran_md5` on
+  conflict, so calling it in each block does not help: each call replaces the
+  one before. No file since the ledger began has had two blocks; the
+  two-block files before it (`20261030T1930`, `20261030T2100`) were
+  backfilled with no `ran_md5` at all. **New files: split instead** — see
+  below.
 - **The editor changed its trailer.** `submitted_text()` anchors on the
   `-- source: dashboard` marker and removes everything after it, so a fourth
   line or a reordering is still stripped; a renamed marker is not.
@@ -1168,7 +1173,15 @@ The record of what ran is the migration's body: every statement outside the
 comments. Usually that is one `BEGIN;` … `COMMIT;` block. Some files need more
 than one: `ALTER TYPE … ADD VALUE` must commit before anything uses the new
 value, so a file that adds an enum value and then uses it has two, and both
-are the record. Once a migration has run, annotate it, don't amend it. A commented-out verification block never ran
+are the record.
+
+**Since 19 November, split such a file in two instead** — one file that adds
+the value and records itself, and one that uses it. The ledger keeps one row
+per filename, and `record_migration` in a second block silently overwrites
+the first block's `ran_md5`, so a two-block file can never be fingerprinted
+whole. `20261119T1500` / `T1510` are the first pair written this way. The
+older two-block files stay as they are; the bullet under **Two hashes** says
+what their rows can and cannot prove. Once a migration has run, annotate it, don't amend it. A commented-out verification block never ran
 as part of the migration; it's a tool for later runs, so it may be fixed in
 place, with a note in the file's header saying what changed and why. If a
 result from the old block has already been recorded anywhere, the note says
