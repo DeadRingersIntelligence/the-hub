@@ -68,6 +68,12 @@
 -- reformat of that function will trip it one day. It fails safe — it refuses
 -- and says compare.
 --
+-- APPLIED to staging and production, 19 Nov 2026 (production at 17:22 UTC),
+-- from the file hashed 54df1536, commit 2ca4f88. ran_md5
+-- 73a98c3fa51098bad5b23bd3a89e6f0d (25913 characters) on both — the file's
+-- text exactly, less the final newline the editor drops. This note and the
+-- verification result at the foot were added afterwards (db/README.md).
+--
 -- Safe to run twice? No: the precondition refuses if the function exists,
 -- and says so.
 --
@@ -281,8 +287,11 @@ COMMIT;
 -- death changed on its own.
 --
 -- RUN ON A SCRATCH REBUILD, 19 Nov — every migration on main, in order, with
--- this file, after the review's changes: every line matched. NOT YET RUN ON
--- STAGING.
+-- this file, after the review's changes: every line matched.
+--
+-- RUN ON STAGING AND ON PRODUCTION, 19 Nov, after the migration: every line
+-- matched on both, and the two reports were identical to each other and to
+-- the scratch rebuild's.
 --
 -- DO $$
 -- DECLARE
