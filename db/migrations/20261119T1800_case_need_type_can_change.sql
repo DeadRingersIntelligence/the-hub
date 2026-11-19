@@ -33,6 +33,21 @@
 -- person is on another case, that case sees them as at-need too. That is
 -- correct — they died — and the history row on the decedent records it.
 --
+-- THE REVERSE IS GUARDED (review, 19 Nov). Making a person living again — a
+-- correction — would leave any OTHER case they are on pairing an at-need case
+-- with a living person: the pairing create_case_for_call refuses, on a case
+-- nobody touched, with no history row to explain it. One person on two cases
+-- is a state 20261106T1000's merges now produce on purpose. So before making
+-- someone living, this refuses if another case links them with a need type
+-- that does not match their new status, and names it: "Ellis is at-need on
+-- another case; change that one first." The check covers the two living
+-- types against each other too (imminent there, pre-need here), which breaks
+-- the same pairing. Forward — the person died — is not refused.
+--
+-- THIS CAN CHANGE A RECORDED DATE OF DEATH. On a case already at-need, a
+-- different p_date_of_death replaces the one recorded: the correction path.
+-- The history row says so in words, with the old date and the new.
+--
 -- NOT TOUCHED: revenue. case_revenue_date() reads status, served_on and the
 -- booked date, never need_type, so this moves no money and needs no reason.
 -- Reports that group by need type will see the case under its new type,
@@ -40,6 +55,18 @@
 --
 -- No manager, no reason: correcting a case's type is ordinary work, and the
 -- history row says who did it and what it was before.
+--
+-- REVIEWED 19 Nov (planning session) on commit ba33402. Changed in answer:
+--   * making a person living is refused when another case they are on has a
+--     need type that would no longer match them, naming it (verification 6);
+--   * a date of death changed on its own gets its own history sentence,
+--     instead of "changed Ellis from at-need to at-need" (verification 7);
+--   * the header and the function comment now say this can change a recorded
+--     date of death.
+-- Left as it is, on the reviewer's word: the precondition matches a literal
+-- substring of create_case_for_call's source, double space included, so a
+-- reformat of that function will trip it one day. It fails safe — it refuses
+-- and says compare.
 --
 -- Safe to run twice? No: the precondition refuses if the function exists,
 -- and says so.
@@ -87,7 +114,7 @@ RETURNS cases LANGUAGE plpgsql AS $$
 DECLARE
   a record; r cases; v_org uuid; v_was case_need_type; n int;
   v_dec uuid; v_name text; v_status decedent_status; v_dod date;
-  v_new_status decedent_status; v_new_dod date;
+  v_new_status decedent_status; v_new_dod date; v_other case_need_type;
 BEGIN
   SELECT * INTO a FROM hand_link_actor();
 
@@ -131,6 +158,22 @@ BEGIN
                     END::decedent_status;
     v_new_dod := CASE WHEN p_need_type = 'at_need' THEN COALESCE(p_date_of_death, v_dod) END;
 
+    -- Making the person living must not break another case they are on.
+    IF v_new_status IN ('pre_need_subject', 'imminent') THEN
+      SELECT c.need_type INTO v_other
+        FROM case_decedents cd JOIN cases c ON c.id = cd.case_id
+       WHERE cd.decedent_id = v_dec AND cd.case_id <> p_case
+         AND c.need_type IS DISTINCT FROM
+             (CASE v_new_status WHEN 'pre_need_subject' THEN 'pre_need' ELSE 'imminent' END)::case_need_type
+       ORDER BY c.need_type = 'at_need' DESC
+       LIMIT 1;
+      IF FOUND THEN
+        RAISE EXCEPTION '% is % on another case; change that one first',
+          COALESCE(v_name, 'This person'), replace(v_other::text, '_', '-')
+          USING HINT = 'A person''s status is shared by every case they''re on. Changing this one would leave the other case describing someone who isn''t in the state it says.';
+      END IF;
+    END IF;
+
     IF v_new_status IS DISTINCT FROM v_status OR v_new_dod IS DISTINCT FROM v_dod THEN
       UPDATE decedents SET status = v_new_status, date_of_death = v_new_dod, updated_at = now()
        WHERE id = v_dec;
@@ -142,6 +185,14 @@ BEGIN
              WHEN v_dod IS NOT NULL AND v_new_dod IS NULL
                THEN format('%s recorded %s as living (a date of death of %s was removed)', a.v_name,
                            COALESCE(v_name, 'this person'), to_char(v_dod, 'FMMonth FMDD, YYYY'))
+             -- Same status, different date: the date of death was corrected.
+             WHEN v_new_status = v_status AND v_dod IS NULL
+               THEN format('%s recorded %s''s date of death as %s', a.v_name,
+                           COALESCE(v_name, 'this person'), to_char(v_new_dod, 'FMMonth FMDD, YYYY'))
+             WHEN v_new_status = v_status
+               THEN format('%s changed %s''s date of death from %s to %s', a.v_name,
+                           COALESCE(v_name, 'this person'),
+                           to_char(v_dod, 'FMMonth FMDD, YYYY'), to_char(v_new_dod, 'FMMonth FMDD, YYYY'))
              ELSE format('%s changed %s from %s to %s', a.v_name, COALESCE(v_name, 'this person'),
                          replace(v_status::text, '_', '-'), replace(v_new_status::text, '_', '-')) END,
         a.v_user,
@@ -173,9 +224,12 @@ COMMENT ON FUNCTION set_case_need_type(uuid, case_need_type, uuid, date) IS
   'cases.need_type besides create_case_for_call(). Keeps the pairing that '
   'creation enforces by moving the named decedent''s status with it: '
   'pre_need <-> pre_need_subject, imminent <-> imminent, at_need <-> at_need '
-  'or deceased. Becoming at-need may take a date of death; becoming living '
-  'clears one, and the history row keeps it. With several people on the '
-  'case, p_decedent must say which; nobody else is touched. Moves no '
+  'or deceased. Becoming at-need may take a date of death; on a case already '
+  'at-need, a different date REPLACES the recorded one (a correction). '
+  'Becoming living clears the date, and the history row keeps it — and is '
+  'refused if another case the person is on has a need type that would no '
+  'longer match them. With several people on the case, p_decedent must say '
+  'which; nobody else is touched. Moves no '
   'revenue, so needs no reason and no manager. History rows on the case and '
   'on the decedent.';
 
@@ -194,7 +248,7 @@ DECLARE v text;
 BEGIN
   SELECT md5(prosrc) INTO v FROM pg_proc
    WHERE oid = 'set_case_need_type(uuid,case_need_type,uuid,date)'::regprocedure;
-  IF v IS DISTINCT FROM 'cc8c208f0295d172d4b85e4e4f5ddda3' THEN
+  IF v IS DISTINCT FROM 'b0c9f824745b1efdd6257afe0a61e695' THEN
     RAISE EXCEPTION 'set_case_need_type installed as % — not the reviewed body. Nothing has been kept.', v;
   END IF;
 END $$;
@@ -223,8 +277,12 @@ COMMIT;
 -- one person; a couple's pre-need case; and someone on neither. Every
 -- refusal is checked for its own message.
 --
+-- Lines 6 and 7 are the review's: one person on two cases, and a date of
+-- death changed on its own.
+--
 -- RUN ON A SCRATCH REBUILD, 19 Nov — every migration on main, in order, with
--- this file: every line matched. NOT YET RUN ON STAGING.
+-- this file, after the review's changes: every line matched. NOT YET RUN ON
+-- STAGING.
 --
 -- DO $$
 -- DECLARE
@@ -232,6 +290,8 @@ COMMIT;
 --   v_org uuid; v_user uuid; a_user uuid := gen_random_uuid();
 --   d_one uuid; d_him uuid; d_her uuid; d_other uuid;
 --   c_one uuid; c_couple uuid; n_notes int;
+--   d_s1 uuid; d_s2 uuid; d_s3 uuid; d_late uuid;
+--   c_s1a uuid; c_s1b uuid; c_s2a uuid; c_s2b uuid; c_s3a uuid; c_s3b uuid; c_late uuid;
 -- BEGIN
 --   PERFORM set_config('app.is_internal', 'on', true);
 --   SELECT id INTO v_org FROM organizations ORDER BY created_at LIMIT 1;
@@ -256,6 +316,28 @@ COMMIT;
 --   INSERT INTO case_decedents (case_id, decedent_id) VALUES (c_one, d_one);
 --   INSERT INTO cases (organization_id, need_type, created_by) VALUES (v_org, 'pre_need', v_user) RETURNING id INTO c_couple;
 --   INSERT INTO case_decedents (case_id, decedent_id) VALUES (c_couple, d_him), (c_couple, d_her);
+--
+--   -- One person on two cases — what 20261106T1000's merges now produce.
+--   -- s1: at-need on both. s2: imminent on both. s3: pre-need on both.
+--   INSERT INTO decedents (organization_id, first_name, last_name, status)
+--   VALUES (v_org, 'ZZZ', 'Zatneed', 'at_need') RETURNING id INTO d_s1;
+--   INSERT INTO decedents (organization_id, first_name, last_name, status)
+--   VALUES (v_org, 'ZZZ', 'Zimminent', 'imminent') RETURNING id INTO d_s2;
+--   INSERT INTO decedents (organization_id, first_name, last_name, status)
+--   VALUES (v_org, 'ZZZ', 'Zplanning', 'pre_need_subject') RETURNING id INTO d_s3;
+--   INSERT INTO cases (organization_id, need_type) VALUES (v_org, 'at_need')  RETURNING id INTO c_s1a;
+--   INSERT INTO cases (organization_id, need_type) VALUES (v_org, 'at_need')  RETURNING id INTO c_s1b;
+--   INSERT INTO cases (organization_id, need_type) VALUES (v_org, 'imminent') RETURNING id INTO c_s2a;
+--   INSERT INTO cases (organization_id, need_type) VALUES (v_org, 'imminent') RETURNING id INTO c_s2b;
+--   INSERT INTO cases (organization_id, need_type) VALUES (v_org, 'pre_need') RETURNING id INTO c_s3a;
+--   INSERT INTO cases (organization_id, need_type) VALUES (v_org, 'pre_need') RETURNING id INTO c_s3b;
+--   INSERT INTO case_decedents (case_id, decedent_id) VALUES
+--     (c_s1a, d_s1), (c_s1b, d_s1), (c_s2a, d_s2), (c_s2b, d_s2), (c_s3a, d_s3), (c_s3b, d_s3);
+--   -- An at-need case whose date of death is not yet known.
+--   INSERT INTO decedents (organization_id, first_name, last_name, status)
+--   VALUES (v_org, 'ZZZ', 'Zlate', 'at_need') RETURNING id INTO d_late;
+--   INSERT INTO cases (organization_id, need_type) VALUES (v_org, 'at_need') RETURNING id INTO c_late;
+--   INSERT INTO case_decedents (case_id, decedent_id) VALUES (c_late, d_late);
 --
 --   SELECT count(*) INTO n_notes FROM notifications;
 --
@@ -322,6 +404,41 @@ COMMIT;
 --          || ', him: ' || (SELECT status FROM decedents WHERE id = d_him)
 --          || ', her: ' || (SELECT status FROM decedents WHERE id = d_her)
 --          || '   (expect at_need, at_need, pre_need_subject — she is untouched)' || chr(10);
+--
+--   -- 6. Review: making a person living must not break another case they are on.
+--   BEGIN
+--     PERFORM set_case_need_type(c_s1b, 'pre_need');
+--     r := r || '6. at-need person, on another at-need case, made pre-need: ALLOWED (BAD — that case now pairs at-need with a living person)' || chr(10);
+--   EXCEPTION WHEN others THEN
+--     r := r || '6. at-need on another case, refused: ' || SQLERRM
+--            || CASE WHEN SQLERRM LIKE '%Zatneed is at-need on another case; change that one first%' THEN '   (right reason)' ELSE '   (WRONG REASON)' END || chr(10);
+--   END;
+--   BEGIN
+--     PERFORM set_case_need_type(c_s2b, 'pre_need');
+--     r := r || '   imminent on another case, made pre-need: ALLOWED (BAD)' || chr(10);
+--   EXCEPTION WHEN others THEN
+--     r := r || '   imminent on another case, refused: ' || SQLERRM
+--            || CASE WHEN SQLERRM LIKE '%Zimminent is imminent on another case%' THEN '   (right reason)' ELSE '   (WRONG REASON)' END || chr(10);
+--   END;
+--   r := r || '   after both refusals — person statuses: '
+--          || (SELECT status FROM decedents WHERE id = d_s1) || ', ' || (SELECT status FROM decedents WHERE id = d_s2)
+--          || '   (expect at_need, imminent — nothing changed)' || chr(10);
+--   BEGIN
+--     PERFORM set_case_need_type(c_s3b, 'at_need', NULL, t - 1);
+--     r := r || '   forward (a pre-need person on two cases dies): allowed — person now '
+--            || (SELECT status FROM decedents WHERE id = d_s3) || '   (expect at_need; the other case sees it, by design)' || chr(10);
+--   EXCEPTION WHEN others THEN
+--     r := r || '   forward: REFUSED (BAD — the person died; every case should see it): ' || SQLERRM || chr(10);
+--   END;
+--
+--   -- 7. Review: only the date of death changes — the history says so.
+--   PERFORM set_case_need_type(c_late, 'at_need', NULL, t - 5);
+--   PERFORM set_case_need_type(c_late, 'at_need', NULL, t - 3);
+--   r := r || '7. date of death recorded, then corrected — person date: '
+--          || (SELECT date_of_death FROM decedents WHERE id = d_late) || '   (expect ' || (t - 3) || ')' || chr(10)
+--          || '   history: ' || COALESCE((SELECT string_agg(summary, ' | ' ORDER BY summary DESC) FROM change_history
+--                                         WHERE entity = 'decedent' AND entity_id = d_late), 'NONE (BAD)') || chr(10)
+--          || '   (expect "recorded ZZZ Zlate''s date of death as" and "changed ZZZ Zlate''s date of death from ... to ..."; never "from at-need to at-need")' || chr(10);
 --
 --   -- 5. Nothing about money.
 --   PERFORM set_config('role', 'postgres', true);
