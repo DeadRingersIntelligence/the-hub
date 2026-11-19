@@ -99,6 +99,13 @@ BEGIN
     WHEN 'at_need'  THEN RETURN CASE WHEN p_current IN ('at_need', 'deceased') THEN p_current
                                      ELSE 'at_need' END;
     ELSE
+      -- THIS MESSAGE IS MATCHED BY TEXT: verification 5 at the foot of
+      -- 20261119T1900 searches the installed source for the last four words
+      -- of the message below, to prove this refusal is here. Reword it and
+      -- reword that check in the same change, or the check breaks — or goes
+      -- on passing because the words survive somewhere else. (Which is why
+      -- this comment does not quote them: if it did, deleting the RAISE and
+      -- keeping the comment would still pass.)
       RAISE EXCEPTION 'decedent_status_for_need_type doesn''t know the need type %', p_need_type
         USING HINT = 'A new need type is added here, saying which decedent status goes with it. Until it is, cases of that type are refused rather than created unchecked.';
   END CASE;
@@ -368,7 +375,7 @@ BEGIN
     INTO bad
     FROM (VALUES
     ('create_case_for_call(uuid,case_need_type,decedent_status,text,text,date,uuid,text,uuid[])', 'a7fe724b27a640ae91d0f58a15c5f82d'),
-    ('decedent_status_for_need_type(case_need_type,decedent_status)', 'daeec97ba1ae57dfc857220bdfd894ef'),
+    ('decedent_status_for_need_type(case_need_type,decedent_status)', '76e211e117c22ada1888d9c6f10e6b63'),
     ('set_case_need_type(uuid,case_need_type,uuid,date)', '4497b842eed7c61e49ba15c482b3a856')
          ) AS e(sig, want)
     LEFT JOIN pg_proc p ON p.oid = to_regprocedure(e.sig)
@@ -494,7 +501,9 @@ COMMIT;
 --   --    No fourth value exists to call it with, so this reads the installed
 --   --    source; every value that does exist must get an answer. The search
 --   --    text has no apostrophe: in the stored source the message's "doesn't"
---   --    is written doubled, so searching for it as typed never matches.
+--   --    is written doubled, so searching for it as typed never matches. The
+--   --    RAISE carries a comment saying this check matches its text; reword
+--   --    the two together.
 --   r := r || '5. raises on a need type it doesn''t handle: '
 --          || (position('know the need type' IN (SELECT prosrc FROM pg_proc WHERE proname = 'decedent_status_for_need_type')) > 0)
 --          || ', every existing need type answered (none null): '
