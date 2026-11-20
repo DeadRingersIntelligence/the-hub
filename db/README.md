@@ -335,8 +335,13 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261120T2100`**, run on both databases on 20 November and
-identical on both afterwards: `acl`, `com` and `fn` moved by +11 each, to the
+**Last moved by `20261120T2200`**, run on both databases on 20 November and
+identical on both afterwards. All nine matched the predicted table: `acl`
+(+500), `col` (+141), `com` (+489), `con` (−40), `fn` (+638) and `trg` (+82)
+moved, and `defacl`, `mig` and `typ` held. **`con` can go down:** a UNIQUE
+constraint replaced by a partial unique index leaves `con`, and indexes aren't
+in any of the nine. **Before that, by `20261120T2100`**, run on both databases
+on 20 November and identical on both afterwards: `acl`, `com` and `fn` moved by +11 each, to the
 character, as predicted. A signature grew from `…,text)` to
 `…,integer,integer)` in each function's key. Nothing else moved. **Before
 that, by `20261120T2000`**, run on both databases on 20 November and identical
@@ -407,14 +412,14 @@ md5 and length.
 
 | query | md5 | characters |
 |---|---|---|
-| `acl` | `fe367574655c232db1f57b2ef4f51e39` | 45741 |
-| `col` | `9e55fcb189031b6cfc3f563d243d2aed` | 77668 |
-| `com` | `4ca967fc07f8763229c03f1fbf88efe9` | 11682 |
-| `con` | `98873bfd819b0379975460932acc8d1b` | 51269 |
+| `acl` | `ae450d99b756f68db751c2070ba8e2af` | 46241 |
+| `col` | `01d89a8b21f8c57bd5232fee77209467` | 77809 |
+| `com` | `eaa61b15903413889a7bf36a175ee77e` | 12171 |
+| `con` | `a0f9680beb1354c63e09bee1b0cd175d` | 51229 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `2c90f764882bb3256e3e97f704aeb9a1` | 13536 |
+| `fn` | `6c3080a9211c4ad59e925c776b4cf738` | 14174 |
 | `mig` | `88ebb78254ff2daa0ac8286cba945629` | 17719 |
-| `trg` | `d6c6d694bda5c5208185680326dc862a` | 7002 |
+| `trg` | `016fee0defb25d359e0aabeba8f93c8e` | 7084 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
 
 **A migration applied to both databases moves the baseline, and the migration
@@ -669,6 +674,23 @@ forgotten `SET` returns an empty result rather than leaking across tenants.
 The setting lasts only for the run it is in. A `SET` in one query and an
 `INSERT … SELECT` in another means the read returns nothing, so the insert
 silently does nothing — success, no rows, no clue. Keep them in one block.
+
+### `hub.*` flags: a function telling its own trigger something
+
+Two functions pass a fact to a trigger through a transaction-local setting,
+set just before their write and cleared just after:
+- `hub.case_change_reason`: the reason for a revenue move (`20261120T1000`).
+- `hub.partner_grant_by_code`: "this grant came through a consultancy's
+  code" (`20261120T2200`). `partner_access_guard` refuses a firm's insert
+  without it.
+
+**Both are seatbelts, not locks.** `set_config` is PUBLIC and a `hub.*`
+setting isn't privileged, so anyone with raw SQL as `authenticated` can set
+either one. What makes them work is that PostgREST exposes no way to do it.
+If raw `authenticated` SQL ever becomes reachable, both fail together, and
+that is the larger breach, not these two flags. Copy the pattern for a
+function talking to its own trigger. Never use it as the thing that keeps
+someone out.
 
 ## Reading a test result
 

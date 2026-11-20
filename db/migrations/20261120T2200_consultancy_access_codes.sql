@@ -3,6 +3,15 @@
 -- The Hub — a firm grants a consultancy access with the code the consultancy
 -- gives it.
 --
+-- APPLIED to staging (18:51 UTC) and production (18:52 UTC), 20 Nov 2026,
+-- from commit 1c14283, loaded whole. ran_md5 8cdac11962d28fcf0139d77811be26fd
+-- (28350 characters) on both, as predicted. All 19 verification lines
+-- (1-16, with 12b, 15b and 15c) matched on both, identically. The PR said 20;
+-- that was a miscount. All nine baseline queries matched the predicted table:
+-- acl 46241, col 77809, com 12171, con 51229 (down 40: a UNIQUE constraint
+-- became a partial index), fn 14174 and trg 7084 moved; defacl, mig and typ
+-- held. This note was added afterwards.
+--
 -- WHY. 20261120T1800 let a firm's managers grant a consultancy access
 -- (partner_access), but a firm sees only consultancies it has already granted
 -- (partners_read), so there was no way to find one: the permission had no
