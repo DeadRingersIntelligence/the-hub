@@ -34,8 +34,9 @@
 --      revoked_on on the old one: "they had access, it ended, it started
 --      again" is the sequence an audit wants to read. So the old
 --      UNIQUE (partner_id, organization_id) becomes unique among ACTIVE grants
---      only. A guard trigger stops a firm clearing revoked_on, editing a
---      grant, or backdating one. (db/README.md, "Evidence isn't erased by the
+--      only. A guard trigger stops a firm editing a grant or backdating one,
+--      and stops ANYONE, Dead Ringers included, clearing revoked_on:
+--      reinstating is a new row for everyone (review of #62). (db/README.md, "Evidence isn't erased by the
 --      party it concerns". 1800's comment "reinstates by clearing it" is
 --      superseded, and re-issued below.)
 --   5. ALREADY GRANTED IS NOT AN ERROR. grant_partner_access() returns
@@ -58,6 +59,20 @@
 -- can't see a consultancy it hasn't granted, or one whose grant it has
 -- revoked. Both check by hand who's asking and which firm. The grant and the
 -- revoke are INVOKER: they write under 1800's manager policies.
+--
+-- THE CODE IS THE ONLY WAY A FIRM GRANTS (review of #62). 1800's
+-- partner_access_insert says nothing about which consultancy, and a firm
+-- learns the id of anyone it has granted (my_partner_access), so a direct
+-- INSERT would let a firm re-grant a consultancy after its code was rotated.
+-- grant_partner_access sets hub.partner_grant_by_code for its own INSERT;
+-- partner_access_guard refuses a firm's INSERT without it. Same shape as
+-- hub.case_change_reason (20261120T1000).
+--
+-- "THE FIRM" MEANS current_organization_id(). The grant, the revoke and the
+-- list all act on it. For Dead Ringers staff that is their own current firm,
+-- whatever firm a screen is showing; the app hides the controls when staff
+-- view another firm, and the database doesn't. Said again in each function's
+-- comment.
 --
 -- Requires: 003 (partners, partner_access), 20261120T1800, 20261120T1900,
 --           pgcrypto in extensions (001), 20261103T1200 (record_migration).
@@ -123,8 +138,24 @@ COMMENT ON INDEX partner_access_one_active_uq IS
 CREATE FUNCTION partner_access_guard()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+  -- Nobody clears a revocation, Dead Ringers included: reinstating is a new
+  -- row, for everyone. The one rule here with no internal exemption.
+  IF TG_OP = 'UPDATE' AND OLD.revoked_on IS NOT NULL AND NEW.revoked_on IS NULL THEN
+    RAISE EXCEPTION 'a revocation isn''t undone; to give access again, grant it anew'
+      USING HINT = 'A new grant keeps the record of the old one: granted, revoked, granted again.';
+  END IF;
   IF is_internal() THEN RETURN NEW; END IF;
   IF TG_OP = 'INSERT' THEN
+    -- A firm grants with the consultancy's code, through grant_partner_access,
+    -- or not at all. It sets this for its own INSERT and clears it after
+    -- (the hub.case_change_reason pattern, 20261120T1000). Without it, a
+    -- firm that once knew a consultancy's id could grant it again after
+    -- the code was rotated.
+    IF COALESCE(current_setting('hub.partner_grant_by_code', true), '') <> '1' THEN
+      RAISE EXCEPTION 'a consultancy is given access with its access code'
+        USING ERRCODE = '42501',
+              HINT = 'Enter the code the consultancy gave you in Settings, Consultancies.';
+    END IF;
     IF NEW.revoked_on IS NOT NULL THEN
       RAISE EXCEPTION 'a grant starts active; it can''t be recorded as already revoked';
     END IF;
@@ -144,9 +175,10 @@ BEGIN
 END $$;
 
 COMMENT ON FUNCTION partner_access_guard() IS
-  'For a firm: a new grant starts today and active; an existing grant can only '
-  'be ended (revoked_on set, once). Nothing else is edited, and revoked_on is '
-  'never cleared: a consent record is evidence. Dead Ringers is not limited '
+  'For a firm: a new grant is made only through grant_partner_access (the '
+  'consultancy''s code), starts today and active; an existing grant can only be '
+  'ended (revoked_on set, once). For everyone, Dead Ringers included: revoked_on '
+  'is never cleared; reinstating is a new row. A consent record is evidence '
   '(20261120T2200).';
 
 CREATE TRIGGER partner_access_guard_t
@@ -155,9 +187,8 @@ CREATE TRIGGER partner_access_guard_t
 REVOKE ALL ON FUNCTION partner_access_guard() FROM PUBLIC, anon, authenticated;
 
 COMMENT ON POLICY partner_access_update ON partner_access IS
-  'A manager revokes by setting revoked_on, which partners_read honours. A '
-  'grant is not reinstated by clearing it: a re-grant is a new row, and '
-  'partner_access_guard refuses the clearing (20261120T1800, 20261120T2200).';
+  'A manager ends a grant by setting revoked_on, which partners_read honours. '
+  'Giving access again is a new grant (20261120T1800, 20261120T2200).';
 
 -- -----------------------------------------------------------------------------
 -- 4. The code: issued by Dead Ringers, normalised one way, looked up exactly
@@ -239,20 +270,28 @@ DECLARE f record;
 BEGIN
   SELECT * INTO f FROM partner_for_access_code(p_code);
   IF f.already_granted THEN RETURN 'already'; END IF;
+  -- The guard's proof that this grant came through a code. Transaction-local,
+  -- and cleared straight after the INSERT either way.
+  PERFORM set_config('hub.partner_grant_by_code', '1', true);
   BEGIN
     INSERT INTO partner_access (partner_id, organization_id)
     VALUES (f.partner_id, current_organization_id());
   EXCEPTION WHEN unique_violation THEN
+    PERFORM set_config('hub.partner_grant_by_code', '', true);
     RETURN 'already';   -- granted a moment ago, by someone else
   END;
+  PERFORM set_config('hub.partner_grant_by_code', '', true);
   RETURN 'granted';
 END $$;
 COMMENT ON FUNCTION grant_partner_access(text) IS
   'A manager grants a consultancy access to the firm''s data with its access '
   'code: ''granted'', or ''already'' if the firm has it now (not an error). '
   'Takes the code again, never a bare id, so the confirmed name and the grant '
-  'are the same consultancy. INVOKER: writes under partner_access_insert '
-  '(20261120T2200).';
+  'are the same consultancy, and it is the only way a firm grants '
+  '(partner_access_guard). INVOKER: writes under partner_access_insert. Acts on '
+  'current_organization_id(): for Dead Ringers staff that is their own current '
+  'firm, whatever firm a screen is showing. The app hides grant and revoke when '
+  'staff view another firm; the database does not (20261120T2200).';
 
 CREATE FUNCTION revoke_partner_access(p_partner uuid)
 RETURNS void LANGUAGE plpgsql AS $$
@@ -267,7 +306,10 @@ END $$;
 COMMENT ON FUNCTION revoke_partner_access(uuid) IS
   'A manager ends a consultancy''s access from today. The date is the '
   'database''s, never the app''s: east of UTC a firm''s today can be UTC''s '
-  'tomorrow. INVOKER: writes under partner_access_update (20261120T2200).';
+  'tomorrow. INVOKER: writes under partner_access_update. Acts on '
+  'current_organization_id(), like grant_partner_access: the app, not the '
+  'database, keeps staff from using it while viewing another firm '
+  '(20261120T2200).';
 
 CREATE FUNCTION my_partner_access()
 RETURNS TABLE (partner_id uuid, partner_name text, granted_on date, revoked_on date)
@@ -281,7 +323,8 @@ COMMENT ON FUNCTION my_partner_access() IS
   'The signed-in user''s firm''s grants, current and ended, with names. '
   'DEFINER only because partners_read hides a consultancy once its grant is '
   'revoked; scoped by current_organization_id(), so it says nothing about '
-  'anyone else''s (20261120T2200).';
+  'anyone else''s. For Dead Ringers staff that is their own current firm, not '
+  'the firm a screen is showing (20261120T2200).';
 
 REVOKE ALL ON FUNCTION partner_access_code_normal(text) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION issue_partner_access_code(uuid) FROM PUBLIC, anon;
@@ -389,11 +432,14 @@ COMMIT;
 --   BEGIN UPDATE partner_access SET revoked_on = NULL WHERE partner_id = v_p1 AND organization_id = v_org; res := 'ALLOWED';
 --   EXCEPTION WHEN OTHERS THEN res := SQLERRM; END;
 --   r := r || '11. the manager clears revoked_on directly: ' || res
---          || '   (expect "a grant is ended by revoking it, and isn''t otherwise changed")' || chr(10);
---   BEGIN INSERT INTO partner_access (partner_id, organization_id, granted_on) VALUES (v_p3, v_org, current_date - 400);
---     res := 'granted_on ' || (SELECT (granted_on = current_date)::text FROM partner_access WHERE partner_id = v_p3);
---   EXCEPTION WHEN OTHERS THEN res := SQLERRM; END;
---   r := r || '12. a backdated direct insert: ' || res || '   (expect granted_on true: forced to today)' || chr(10);
+--          || '   (expect "a revocation isn''t undone; to give access again, grant it anew")' || chr(10);
+--   BEGIN INSERT INTO partner_access (partner_id, organization_id) VALUES (v_p1, v_org); res := 'ALLOWED';
+--   EXCEPTION WHEN insufficient_privilege THEN res := SQLERRM; END;
+--   r := r || '12. the manager inserts a grant directly, knowing the id: ' || res
+--          || '   (expect "a consultancy is given access with its access code")' || chr(10);
+--   r := r || '12b. the flag is left set after a grant: '
+--          || (COALESCE(current_setting('hub.partner_grant_by_code', true), '') = '1')
+--          || '   (expect false: grant_partner_access clears it)' || chr(10);
 --
 --   res := grant_partner_access(code1);
 --   r := r || '13. re-grant with the code: ' || res
@@ -402,7 +448,7 @@ COMMIT;
 --          || '   (expect granted; 2, 1: a new row, the old one kept)' || chr(10);
 --   r := r || '14. the firm''s list: ' || (SELECT string_agg(partner_name || ' ' || COALESCE('ended ' || revoked_on::text, 'active'), '; ')
 --                                          FROM my_partner_access())
---          || '   (expect One active first, then Retired active, then One ended today)' || chr(10);
+--          || '   (expect ZZZ Consultancy One active, then ZZZ Consultancy One ended today)' || chr(10);
 --
 --   -- ---- rotation, by Dead Ringers ----------------------------------------
 --   PERFORM set_config('app.is_internal', 'on', true);
@@ -414,6 +460,20 @@ COMMIT;
 --          || (SELECT partner_name || ', already ' || already_granted FROM partner_for_access_code(code1b))
 --          || '; the active grant: ' || (SELECT count(*) FROM partner_access WHERE partner_id = v_p1 AND revoked_on IS NULL)
 --          || '   (expect "no consultancy has that code"; ZZZ Consultancy One, already true; 1)' || chr(10);
+--   -- Nobody clears a revocation, Dead Ringers included; a new grant is fine.
+--   PERFORM set_config('app.is_internal', 'on', true);
+--   BEGIN UPDATE partner_access SET revoked_on = NULL
+--          WHERE partner_id = v_p1 AND organization_id = v_org AND revoked_on IS NOT NULL;
+--     res := 'ALLOWED';
+--   EXCEPTION WHEN OTHERS THEN res := SQLERRM; END;
+--   r := r || '15b. Dead Ringers clears a revocation: ' || res
+--          || '   (expect "a revocation isn''t undone; to give access again, grant it anew")' || chr(10);
+--   UPDATE partner_access SET revoked_on = current_date WHERE partner_id = v_p1 AND organization_id = v_org AND revoked_on IS NULL;
+--   INSERT INTO partner_access (partner_id, organization_id) VALUES (v_p1, v_org);
+--   r := r || '15c. Dead Ringers ends it and grants anew, directly: rows now '
+--          || (SELECT count(*) FROM partner_access WHERE partner_id = v_p1 AND organization_id = v_org)
+--          || '   (expect 3: internal may insert, and history is kept)' || chr(10);
+--   PERFORM set_config('app.is_internal', 'off', true);
 --   BEGIN PERFORM issue_partner_access_code(v_p1); res := 'ALLOWED';
 --   EXCEPTION WHEN insufficient_privilege THEN res := SQLSTATE; END;
 --   r := r || '16. the manager issues a code: ' || res || '   (expect 42501)' || chr(10);
