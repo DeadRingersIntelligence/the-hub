@@ -2,6 +2,15 @@
 -- 20261120T1400_what_a_firm_has_bought.sql
 -- The Hub — a firm sees what it has bought. Only Dead Ringers changes it.
 --
+-- APPLIED to staging (14:19 UTC) and production (14:21 UTC), 20 Nov 2026,
+-- from commit e43ff17, sha256 7e820b98…a32bcac1, loaded whole. ran_md5
+-- 944c90332835ce7997ace0f5f1d582d5 (18504 characters; 18540 is the byte
+-- count) on both, as predicted. The verification matched line for line on
+-- both: a professional and a manager each read 3 of 3, every UPDATE and DELETE
+-- hit 0 rows, every INSERT was refused with 42501, and internal staff wrote 1
+-- of each. The baseline moved com to 9044 and mig to 16133, as predicted, and
+-- nothing else moved. This note was added afterwards.
+--
 -- WHAT IS WRONG. Three policies, same shape as the four 20261104T1300 fixed:
 --
 --   organization_capabilities_tenant   (002)
