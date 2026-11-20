@@ -335,8 +335,16 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261120T1900`**, run on both databases on 20 November and
-identical on both afterwards: `con` (+73) and `com` (+73) moved for one
+**Last moved by `20261120T2000`**, run on both databases on 20 November and
+identical on both afterwards: `acl` (+388), `col` (+643), `com` (+445), `con`
+(+717), `fn` (+184) and `mig` (+336) moved for a new table, two new
+functions, a replaced body and policies, each to the character, as
+predicted. **Scratch can predict `acl` for a new table too, if 18 is added:**
+scratch runs Postgres 16, and on 17 the owner of a new table also holds
+`MAINTAIN` (`,postgres:MAINTAIN`). Grant the new table's client roles
+explicitly, `service_role` included, so nothing else differs. **Before that,
+by `20261120T1900`**, run on both databases on 20 November and identical on
+both afterwards: `con` (+73) and `com` (+73) moved for one
 constraint and its comment, to the character, as predicted. Nothing else
 moved. **Before that, by `20261120T1800`**, run on both databases on 20
 November and identical on both afterwards: `com` (+468) and `mig` (+484) moved for two
@@ -395,13 +403,13 @@ md5 and length.
 
 | query | md5 | characters |
 |---|---|---|
-| `acl` | `281e702301326b33242c9317641d6e13` | 45342 |
-| `col` | `02a3e69111b1c32f6813d652598e49c4` | 77025 |
-| `com` | `491d9d51cd483ebbb795e60c47a0dc60` | 11226 |
-| `con` | `01f38ed29714402a9509e4777af58e0e` | 50552 |
+| `acl` | `868f92047ab1095e41d50a34fc1555e4` | 45730 |
+| `col` | `9e55fcb189031b6cfc3f563d243d2aed` | 77668 |
+| `com` | `f1bc231c089ce2cdef9963f7fa479173` | 11671 |
+| `con` | `98873bfd819b0379975460932acc8d1b` | 51269 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `1d483c510e32f8dc625f04f9420f4290` | 13341 |
-| `mig` | `c1787e211d20529075bd1a1b189aedbd` | 17383 |
+| `fn` | `58751aa34da694c67e4652d003db160a` | 13525 |
+| `mig` | `88ebb78254ff2daa0ac8286cba945629` | 17719 |
 | `trg` | `d6c6d694bda5c5208185680326dc862a` | 7002 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
 
@@ -919,20 +927,29 @@ Dead Ringers.
   working on, and `focus_source` records who chose it. Dead Ringers writing a
   client's choice would make that column false. It goes with `partner_access`
   into the managers-only file.
-- **`transcript_segments` gets its own file, for a different reason, and its
-  comment must say so.** It was left out of `20261120T1700` because
-  `merge_contacts` re-points `transcript_segments.contact_id` as the caller.
-  Locking the table would make a merge refuse for any contact who appears in
-  a transcript. The file needs a deliberate path for a merge to re-attribute
-  a transcript. A transcript is not a finding about the firm. It's the
-  system's record of the firm's own call, and nobody hand-writes one, so the
-  reason is evidence integrity, not ownership. It sits under the retention
-  terms `20261120T1400` locked: a firm that can't shorten retention but can
-  edit transcripts has the same hole through a different door. **Open: may a
-  firm ever redact a transcript** (a caller's card number read aloud, say)?
-  If so, it needs a deliberate function that records what was removed and by
-  whom, never a general write permission. This needs settling; it must not be
-  answered by silence.
+- **`transcript_segments`: `20261120T2000`, applied 20 November. The lock
+  protects what was said; attribution is correctable.** It's locked for
+  evidence integrity, not ownership. After it's written, there are exactly
+  four write paths, and the file lists them:
+  - the text: `redact_transcript_segment()` (Dead Ringers, on the firm's request);
+  - `contact_id`: `repoint_transcript_contact()` (a contact merge; the one
+    SECURITY DEFINER path, and it can't touch the text);
+  - `person_id`: `merge_people()` (Dead Ringers);
+  - new rows: the transcription pipeline, as `service_role`.
+
+  Read that file before adding a fifth.
+- **How to redact.** A redaction never deletes the row. The text becomes
+  `[redacted]`, and `transcript_redactions` records who asked, who did it,
+  when and why. It never stores the text or its length, and nobody can update
+  or delete it.
+  - **Use whole-segment mode** for anything that must not be logged. Passage
+    mode sends the sensitive string in the request, where it lands in
+    Supabase's query history.
+  - **The right form is an offset variant**, (segment, start, length, reason),
+    so nothing sensitive travels. It's on the backlog.
+  - **A redaction needs a real Dead Ringers user's session.** It records who
+    did it, so it can't be run as `postgres` in the SQL editor, and it says so
+    in words.
 - **A client's own measure is never a rubric row.** If clients could add
   measures to `rubric_behaviors`, the rubric tables could never be locked, and
   a client's additions would be indistinguishable from Dead Ringers' scoring.
