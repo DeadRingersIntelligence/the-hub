@@ -847,6 +847,28 @@ every one was. What found them was reading them. The scan that would work is a
 list of tables the application never writes, checked against the policies that
 permit writes, and it needs the application rather than the database.
 
+### The firm's data, or Dead Ringers' configuration
+
+A scoped `FOR ALL` policy — `USING (is_internal() OR organization_id =
+current_organization_id())`, with 024's identical `WITH CHECK` — is the house
+pattern for the firm's own data, and correct there: the firm's cases, contacts
+and calls are the firm's to change. **It is wrong on a table that records what
+Dead Ringers has sold or agreed to**, because there it lets the customer write
+the terms. Before writing a firm-scoped policy, ask: *is this the firm's data,
+or Dead Ringers' configuration?* Configuration gets the `organizations` shape
+below — `FOR SELECT` for the firm, `is_internal()` for writes — and not
+`can_manage_settings()`, since a manager is a member of the firm being sold to.
+
+Changed for this reason in `20261120T1400`: `organization_capabilities`,
+`client_entitlements`, `retention_policies`. Any member of a firm could switch
+on a capability, raise a purchased quantity or turn off the storage fee.
+
+**Awaiting a ruling, not yet changed:** the evaluation product (`evaluations`,
+`observations`, `shops`, `shop_interactions`, `outcomes`, `reports`,
+`report_definitions`, `reporting_periods`, `rubrics`, `rubric_behaviors`,
+`focus_behaviors` — Dead Ringers' findings about the firm, which the firm can
+currently edit), and `partner_access` (arguably the firm's consent to give).
+
 ### Which lock to use when a table should not be written
 
 Two files fixed the same shape on the same afternoon and used opposite
