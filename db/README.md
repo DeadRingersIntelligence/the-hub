@@ -870,13 +870,30 @@ Dead Ringers.
 
 **Ruled, not yet built (planning, 20 November):**
 
-- **The evaluation product** (`evaluations`, `observations`, `shops`,
-  `shop_interactions`, `outcomes`, `reports`, `report_definitions`,
-  `reporting_periods`, `rubrics`, `rubric_behaviors`, `focus_behaviors`):
-  same fix, in its own file, after checking the application never writes any
-  of the eleven. First, a product question for Mandie: *can a firm have its own
-  rubrics or focus behaviours?* If so, those are firm-authored and stay with
-  the firm's data.
+- **The evaluation product**: same fix, in its own file, after checking the
+  application never writes any of them. It covers `evaluations`, `observations`,
+  `shops`, `shop_interactions`, `outcomes`, `reports`, `report_definitions` and
+  `reporting_periods`. It also covers the rubric tables: `rubrics`,
+  `rubric_behaviors`, `focus_behaviors`, `rubric_sections` and
+  `rubric_templates`. That file checks every table 007–009 create
+  (`behaviors`, `behavior_answers`, `transcript_segments` and `shopper_forms`
+  too) and says which shape each one has. **The rubric, the focus behaviours
+  and the scoring are Dead Ringers' and proprietary (Mandie, 20 November). No
+  product exception.**
+- **A client's own measure is never a rubric row.** If clients could add
+  measures to `rubric_behaviors`, the rubric tables could never be locked, and
+  a client's additions would be indistinguishable from Dead Ringers' scoring.
+  Client measures belong in the custom-field machinery
+  (`custom_field_definitions`, `custom_field_values`). It is firm-writable,
+  and the lockdown leaves it alone. Today it attaches only to contacts and
+  cases (`custom_field_entity`), so a client measure on an evaluation has
+  nowhere to live yet. Making it real is its own item: add `evaluation` to the
+  enum (two-pass), add a column on `custom_field_values`, and build the UI.
+- **A client field is recorded alongside an evaluation and never enters the
+  score.** The score is computed in `composite_score()` and `section_scores()`.
+  The rule goes in their `COMMENT ON FUNCTION`, in whichever of those two
+  files runs first. It goes there, not only in the UI, so that it isn't
+  assumed separately in three places.
 - **`partner_access`** stays the firm's to give, as consent, but gated to
   managers: the `picklist_items` shape, split per command with
   `can_manage_settings()`.
