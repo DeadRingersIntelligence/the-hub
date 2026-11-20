@@ -3,6 +3,27 @@
 -- The Hub — a notification, a notification preference and a delivery record
 -- belong to one person. Only that person reads them; nobody else writes them.
 --
+-- APPLIED to staging (19:14 UTC) and production (19:15 UTC), 20 Nov 2026,
+-- loaded whole. ran_md5 bcaaaeccfac157259cb402460ff372c2 (26524 characters) on
+-- both, as predicted. All 15 verification lines matched on both, identically:
+-- among them Dee (Dead Ringers) reading 0/0/0 and marking 0, Olive's body
+-- rewrite refused 42501, both notify triggers writing 2 with FORCE on, and a
+-- firm manager's scope created with its default preference. All nine baseline
+-- queries matched the predicted table: acl 46093 (-148), com 12419 (+248),
+-- fn 14192 (+18), mig 17743 (+24); col, con, defacl, trg and typ held.
+-- Review checked production's grants before the run, and derived acl, fn and
+-- mig from first principles. This note was added afterwards.
+--
+-- FOR WHOEVER BUILDS THE DELIVERY PIPELINE, OR A SUPPORT VIEW (review after
+-- the run). notification_log_read's comment calls a delivery record evidence,
+-- but doesn't say that Dead Ringers can't read it either, and that this is
+-- deliberate. It is. is_internal() was removed from all three tables on
+-- purpose: no screen read across users. If a pipeline or a support screen
+-- needs to read someone else's notifications or delivery log, don't put
+-- is_internal() back in a policy. Build that read deliberately, as a named
+-- screen with a reviewed function behind it. A failure you can't diagnose
+-- here is this rule, not a bug.
+--
 -- WHY. The last item on "must land before any firm gets a login" (planning,
 -- 20 November). The bell filters notifications to the signed-in user in the
 -- app (loadBell and markNotificationRead in hellophone
