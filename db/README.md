@@ -863,11 +863,23 @@ Changed for this reason in `20261120T1400`: `organization_capabilities`,
 `client_entitlements`, `retention_policies`. Any member of a firm could switch
 on a capability, raise a purchased quantity or turn off the storage fee.
 
-**Awaiting a ruling, not yet changed:** the evaluation product (`evaluations`,
-`observations`, `shops`, `shop_interactions`, `outcomes`, `reports`,
-`report_definitions`, `reporting_periods`, `rubrics`, `rubric_behaviors`,
-`focus_behaviors` — Dead Ringers' findings about the firm, which the firm can
-currently edit), and `partner_access` (arguably the firm's consent to give).
+`retention_policies` was kept in for a reason beyond the fee (planning, 20
+November): a firm quietly shortening retention destroys recordings and
+transcripts, which are evidence. Different retention is a conversation with
+Dead Ringers.
+
+**Ruled, not yet built (planning, 20 November):**
+
+- **The evaluation product** (`evaluations`, `observations`, `shops`,
+  `shop_interactions`, `outcomes`, `reports`, `report_definitions`,
+  `reporting_periods`, `rubrics`, `rubric_behaviors`, `focus_behaviors`):
+  same fix, in its own file, after checking the application never writes any
+  of the eleven. First, a product question for Mandie: *can a firm have its own
+  rubrics or focus behaviours?* If so, those are firm-authored and stay with
+  the firm's data.
+- **`partner_access`** stays the firm's to give, as consent, but gated to
+  managers: the `picklist_items` shape, split per command with
+  `can_manage_settings()`.
 
 ### Which lock to use when a table should not be written
 

@@ -116,6 +116,16 @@ BEGIN
          AND relrowsecurity) <> 3 THEN
     RAISE EXCEPTION 'row-level security is not enabled on all three tables; stop and look';
   END IF;
+
+  -- FORCE as well: this file makes the policy the lock, and without FORCE the
+  -- table's owner walks past it.
+  IF (SELECT count(*) FROM pg_class
+       WHERE oid IN ('public.organization_capabilities'::regclass,
+                     'public.client_entitlements'::regclass,
+                     'public.retention_policies'::regclass)
+         AND relforcerowsecurity) <> 3 THEN
+    RAISE EXCEPTION 'row-level security is not FORCEd on all three tables; stop and look';
+  END IF;
 END $$;
 
 -- -----------------------------------------------------------------------------
