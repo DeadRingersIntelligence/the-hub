@@ -1019,6 +1019,34 @@ four migrations to get back to one. Two checks is the right answer if partner
 access and data-sharing agreements genuinely have separate lifecycles — but
 then say so, in a sentence, at the moment the second one exists.
 
+## Dated grants: in force from, out of force from
+
+Anything granted for a period (a capability, a data-sharing agreement) is
+asked about through **one predicate, `in_force(from, until, on)`**
+(`20261120T1510`): **in force from `from`, out of force from `until`, both
+inclusive.** A capability with `disabled_on` the 20th is off all day on the
+20th. `capability_in_force()` calls it, and `has_capability()` calls that. A
+future `agreement_in_force()` must call it too, rather than write the
+comparison again.
+
+**Why dates, not timestamps** (planning, 20 November):
+
+- **A revocation can't say "2pm".** Agreements and purchases are made and
+  ended by the day. A timestamp would claim a precision nobody has, and two
+  readers would disagree about which side of it a call fell on.
+- **Where the day is ambiguous, err towards less access.** That's right for
+  consent: a grant ends at the start of its last day, not the end of it.
+  `current_date` is the database's date (UTC on Supabase), so a firm in the
+  Americas loses a capability on the evening before its `disabled_on`. That's
+  the same direction of error, and accepted.
+- **One predicate,** because the alternative is the same `<=` / `<` written in
+  three places, with one of them inclusive at the wrong end.
+
+**`client_type` sets the default only when a firm is set up**
+(`organizations_default_capabilities`, on insert). After that, the
+`organization_capabilities` row is the truth. Changing a firm's `client_type`
+later doesn't switch anything on or off.
+
 ## SECURITY DEFINER functions
 
 A definer function runs as its owner, so it bypasses RLS entirely. Two things
@@ -1082,6 +1110,23 @@ the change itself. It is raised for marking lost a case that counts as revenue
 service date. Neither needs a manager: the reason goes on the case's history,
 and the firm's managers receive a `case_revenue_moved` notification carrying
 it.
+
+### KP — a capability not in force
+
+Raised by the triggers `cases_need_capability()` and
+`interactions_case_link_needs_capability()` (`20261120T1510`).
+
+| Code | Means | Raised by |
+|---|---|---|
+| `KP001` | Cases aren't switched on for this firm: no new case, no new link from a call to a case | a new row in `cases`; a call gaining a `case_id` |
+
+Raised by triggers, not by the functions, because a firm user holds `INSERT`
+on `cases` and `UPDATE` on `interactions` directly. So it covers
+`create_case_for_call`, `set_call_case`, propagation, a direct API write and
+even `postgres`. The app hides the feature when cases are off, so `KP001`
+reaching a person means the page and the database disagree. Show its words
+and don't retry. Unlinking, editing an existing case and reading one are never
+refused.
 
 ### Choosing a class
 
