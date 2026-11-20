@@ -335,7 +335,11 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261120T1600`**, run on both databases on 20 November and
+**Last moved by `20261120T1700`**, run on both databases on 20 November and
+identical on both afterwards: `com` (+1137, twenty policy comments and two
+function comments) and `mig` (+766, ten policies replaced by twenty) moved,
+to the character, as predicted. `acl` held, because the grants were kept.
+**Before that, by `20261120T1600`**, run on both databases on 20 November and
 identical on both afterwards: `acl` (+155), `com` (+103) and `fn` (+227) moved
 for two new functions, their grants and comments, to the character, as
 predicted. Nothing else moved. **Before that, by `20261120T1510`**, run on
@@ -387,11 +391,11 @@ md5 and length.
 |---|---|---|
 | `acl` | `281e702301326b33242c9317641d6e13` | 45342 |
 | `col` | `02a3e69111b1c32f6813d652598e49c4` | 77025 |
-| `com` | `913ddea56dda3da3ca24062d9c511e63` | 9548 |
+| `com` | `aa5b7876bc74cf148b1c1ccdba690971` | 10685 |
 | `con` | `e8ab294ac7fe127796b26c187060aa2a` | 50479 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
 | `fn` | `1d483c510e32f8dc625f04f9420f4290` | 13341 |
-| `mig` | `d52ddb026ebf4b8faef97c3453720cc4` | 16133 |
+| `mig` | `ceb450571fd9eb8c1f014f1aec3292e5` | 16899 |
 | `trg` | `d6c6d694bda5c5208185680326dc862a` | 7002 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
 
@@ -896,7 +900,7 @@ Dead Ringers.
 
 **Ruled, not yet built (planning, 20 November):**
 
-- **The evaluation product: `20261120T1700`.** It locks ten tables:
+- **The evaluation product: `20261120T1700`, applied 20 November.** It locks ten tables:
   `evaluations`, `observations`, `shops`, `shop_interactions`, `outcomes`,
   `reports`, `report_definitions`, `reporting_periods`, `rubrics` and
   `rubric_behaviors`. `rubric_sections`, `rubric_templates`, `behaviors`,

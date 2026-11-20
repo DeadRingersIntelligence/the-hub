@@ -2,6 +2,18 @@
 -- 20261120T1700_the_findings_are_ours.sql
 -- The Hub — a firm sees its evaluations. Only Dead Ringers writes them.
 --
+-- APPLIED to staging (17:12 UTC) and production (17:13 UTC), 20 Nov 2026,
+-- from commit a45bcf2, sha256 5a69bcdc…3e0a8371, loaded whole. ran_md5
+-- 37b1843b61ac94d504f44c8eb20b9f53 (21602 characters) on both, as predicted.
+-- Before the run, the executable lines were diffed against the eleven-table
+-- version: focus_behaviors was removed, every count went from 11 to 10, and
+-- the ledger note changed; nothing else. The verification matched on both:
+-- a professional and a manager each got 1 / 0 / 0 / 42501 on all ten tables,
+-- Dead Ringers updated 10 of 10, and transcript_segments and focus_behaviors
+-- kept their _tenant policies. The baseline moved com to 10685 and mig to
+-- 16899, each to the character, and nothing else moved. This note was added
+-- afterwards.
+--
 -- WHAT IS WRONG. Ten tables of the evaluation product carry one firm-scoped
 -- FOR ALL policy each, <t>_tenant, with 024's identical WITH CHECK, and
 -- authenticated holds INSERT, UPDATE and DELETE on all of them. So any member
