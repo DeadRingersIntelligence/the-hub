@@ -896,25 +896,33 @@ Dead Ringers.
 
 **Ruled, not yet built (planning, 20 November):**
 
-- **The evaluation product**: same fix, in its own file, after checking the
-  application never writes any of them. It covers `evaluations`, `observations`,
-  `shops`, `shop_interactions`, `outcomes`, `reports`, `report_definitions` and
-  `reporting_periods`. It also covers the rubric tables: `rubrics`,
-  `rubric_behaviors`, `focus_behaviors`, `rubric_sections` and
-  `rubric_templates`, plus `behaviors`, `behavior_answers` and
-  `shopper_forms`: Dead Ringers' catalogue and findings.
-  **`transcript_segments` is locked by the same file, for a different reason,
-  and its comment must say so.** A transcript is not a finding about the firm.
-  It is the system's record of the firm's own call, and nobody hand-writes
-  one, so the reason is evidence integrity, not ownership. It sits under the
-  retention terms `20261120T1400` locked: a firm that can't shorten retention
-  but can edit transcripts has the same hole through a different door.
-  **Open: may a firm ever redact a transcript** (a caller's card number read
-  aloud, say)? If so, it needs a deliberate function that records what was
-  removed and by whom, never a general write permission. This needs
-  settling; it must not be answered by silence. **The rubric, the focus behaviours
-  and the scoring are Dead Ringers' and proprietary (Mandie, 20 November). No
-  product exception.**
+- **The evaluation product: `20261120T1700`.** It locks ten tables:
+  `evaluations`, `observations`, `shops`, `shop_interactions`, `outcomes`,
+  `reports`, `report_definitions`, `reporting_periods`, `rubrics` and
+  `rubric_behaviors`. `rubric_sections`, `rubric_templates`, `behaviors`,
+  `behavior_answers` and `shopper_forms` were already locked. **The rubric,
+  the behaviours and the scoring are Dead Ringers' and proprietary (Mandie,
+  20 November). No product exception.**
+- **`focus_behaviors` is the firm's choice, not a finding** (review of #57 and
+  Mandie, 20 November). It defines no behaviour and scores nothing. It
+  records which of Dead Ringers' behaviours a firm, person or location is
+  working on, and `focus_source` records who chose it. Dead Ringers writing a
+  client's choice would make that column false. It goes with `partner_access`
+  into the managers-only file.
+- **`transcript_segments` gets its own file, for a different reason, and its
+  comment must say so.** It was left out of `20261120T1700` because
+  `merge_contacts` re-points `transcript_segments.contact_id` as the caller.
+  Locking the table would make a merge refuse for any contact who appears in
+  a transcript. The file needs a deliberate path for a merge to re-attribute
+  a transcript. A transcript is not a finding about the firm. It's the
+  system's record of the firm's own call, and nobody hand-writes one, so the
+  reason is evidence integrity, not ownership. It sits under the retention
+  terms `20261120T1400` locked: a firm that can't shorten retention but can
+  edit transcripts has the same hole through a different door. **Open: may a
+  firm ever redact a transcript** (a caller's card number read aloud, say)?
+  If so, it needs a deliberate function that records what was removed and by
+  whom, never a general write permission. This needs settling; it must not be
+  answered by silence.
 - **A client's own measure is never a rubric row.** If clients could add
   measures to `rubric_behaviors`, the rubric tables could never be locked, and
   a client's additions would be indistinguishable from Dead Ringers' scoring.
@@ -926,12 +934,12 @@ Dead Ringers.
   enum (two-pass), add a column on `custom_field_values`, and build the UI.
 - **A client field is recorded alongside an evaluation and never enters the
   score.** The score is computed in `composite_score()` and `section_scores()`.
-  The rule goes in their `COMMENT ON FUNCTION`, in whichever of those two
-  files runs first. It goes there, not only in the UI, so that it isn't
+  The rule is in their `COMMENT ON FUNCTION`, added by `20261120T1700`. It goes there, not only in the UI, so that it isn't
   assumed separately in three places.
-- **`partner_access`** stays the firm's to give, as consent, but gated to
-  managers: the `picklist_items` shape, split per command with
-  `can_manage_settings()`.
+- **The managers-only file: `partner_access` and `focus_behaviors`.** Both
+  stay the firm's, gated to managers: the `picklist_items` shape, split per
+  command with `can_manage_settings()`. `partner_access` is the firm's consent
+  to give; `focus_behaviors` is the firm's choice of what to work on.
 
 ### Which lock to use when a table should not be written
 

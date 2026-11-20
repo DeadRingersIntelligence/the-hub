@@ -2,7 +2,7 @@
 -- 20261120T1700_the_findings_are_ours.sql
 -- The Hub — a firm sees its evaluations. Only Dead Ringers writes them.
 --
--- WHAT IS WRONG. Eleven tables of the evaluation product carry one firm-scoped
+-- WHAT IS WRONG. Ten tables of the evaluation product carry one firm-scoped
 -- FOR ALL policy each, <t>_tenant, with 024's identical WITH CHECK, and
 -- authenticated holds INSERT, UPDATE and DELETE on all of them. So any member
 -- of a firm, at any seniority, can rewrite Dead Ringers' findings about that
@@ -15,9 +15,10 @@
 --
 -- THE RULING (planning and Mandie, 20 November):
 --
---   * The rubric, the focus behaviours and the scoring are Dead Ringers'
---     and proprietary. Lock them with the other evaluation tables, with no
---     product exception.
+--   * The rubric, the behaviours and the scoring are Dead Ringers' and
+--     proprietary. Lock them with the other evaluation tables, with no
+--     product exception. (Which behaviours a firm focuses on is the firm's
+--     choice; see focus_behaviors below.)
 --   * Use the organizations shape (20261104T1300, 20261120T1400): FOR SELECT
 --     for the firm, exactly as it reads today; FOR ALL with is_internal() for
 --     writes. Not can_manage_settings(), since a manager is a member of the
@@ -28,9 +29,9 @@
 --     the score. That rule goes where the score is computed: section 3 gives
 --     composite_score() and section_scores() their first comments.
 --
--- THE ELEVEN:
+-- THE TEN:
 --
---   007  rubrics, rubric_behaviors, focus_behaviors
+--   007  rubrics, rubric_behaviors
 --   008  evaluations, observations
 --   009  shops, shop_interactions, outcomes
 --   010  reporting_periods, report_definitions, reports
@@ -50,14 +51,17 @@
 -- its own file, together with the redaction ruling and a deliberate path for
 -- a merge to re-attribute a transcript.
 --
--- focus_behaviors: 007 meant focus to be "set by the client or by a coach",
--- and focus_source has a 'client' value. After this file, a client's choice
--- of focus is entered by Dead Ringers on the client's behalf. That follows
--- from the ruling; it's recorded so nobody reads 'client' as "the client
--- wrote this row".
+-- NOT IN THIS FILE EITHER: focus_behaviors (review of #57 and Mandie, 20
+-- November). It defines nothing and scores nothing. It records which of
+-- Dead Ringers' behaviours (locked since 20261103T1000) a firm, person or
+-- location is working on, and focus_source records who chose: client, coach
+-- or system. Locking it would make that column false or meaningless, because
+-- Dead Ringers would be writing the client's choice. Choosing a focus is the
+-- client's. It joins partner_access in a later file that gates both to
+-- managers (can_manage_settings, the picklist_items shape).
 --
 -- IT REMOVES NO WORKING FEATURE. hellophone, all 20 branches, 20 November:
--- no reference to any of the eleven. Inside the Hub, the only function that
+-- no reference to any of the ten. Inside the Hub, the only function that
 -- writes any of them is merge_people, which refuses unless is_internal() and
 -- so passes the new write policy. Foreign-key cascades and SET NULLs aren't
 -- subject to row-level security, so deleting a firm, a call or a person still
@@ -95,7 +99,6 @@ DECLARE
     'observations',       'd2e8db8d16253503444411d251d5cc3c',
     'rubric_behaviors',   '2e3360ea8675f2128085835b6740224c',
     'shop_interactions',  '12470570126ce8ba5d6a9c2a4ec973bd',
-    'focus_behaviors',    'e001fae7c6dc9ee510219d97d074882b',
     'outcomes',           'e001fae7c6dc9ee510219d97d074882b',
     'report_definitions', 'e001fae7c6dc9ee510219d97d074882b',
     'reporting_periods',  'e001fae7c6dc9ee510219d97d074882b',
@@ -122,18 +125,18 @@ BEGIN
     END IF;
   END LOOP;
 
-  IF v_new = 11 THEN
+  IF v_new = 10 THEN
     RAISE EXCEPTION 'already converted; nothing to do here'
       USING HINT = 'This migration has run on this database. Not an error to fix — stop.';
   ELSIF v_new > 0 THEN
-    RAISE EXCEPTION '% of the eleven tables are converted and the rest are not; an interrupted run. Stop and read them', v_new;
+    RAISE EXCEPTION '% of the ten tables are converted and the rest are not; an interrupted run. Stop and read them', v_new;
   END IF;
 
   IF (SELECT count(*) FROM pg_class
        WHERE relnamespace = 'public'::regnamespace
          AND relname IN (SELECT jsonb_object_keys(want))
-         AND relrowsecurity AND relforcerowsecurity) <> 11 THEN
-    RAISE EXCEPTION 'row-level security is not enabled and FORCEd on all eleven tables; stop and look';
+         AND relrowsecurity AND relforcerowsecurity) <> 10 THEN
+    RAISE EXCEPTION 'row-level security is not enabled and FORCEd on all ten tables; stop and look';
   END IF;
 END $$;
 
@@ -143,7 +146,7 @@ END $$;
 DO $$
 DECLARE t text; v_qual text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['rubrics', 'rubric_behaviors', 'focus_behaviors',
+  FOREACH t IN ARRAY ARRAY['rubrics', 'rubric_behaviors',
                            'evaluations', 'observations',
                            'shops', 'shop_interactions', 'outcomes',
                            'reporting_periods', 'report_definitions', 'reports'] LOOP
@@ -191,7 +194,7 @@ BEGIN
   PERFORM record_migration(
     '20261120T1700_the_findings_are_ours.sql',
     NULL,
-    'Eleven evaluation-product tables had FOR ALL _tenant policies. Split into '
+    'Ten evaluation-product tables had FOR ALL _tenant policies. Split into '
     '_read (FOR SELECT, same expression) and _write (is_internal()), as '
     '20261104T1300 and 20261120T1400. Grants unchanged. The score functions '
     'state that client fields never enter a score. transcript_segments is left '
@@ -204,7 +207,7 @@ COMMIT;
 -- Verification — run AFTER the file, as its own statement. One block,
 -- everything rolled back by the closing RAISE.
 --
--- A fixture firm gets one row in each of the eleven tables, made by Dead
+-- A fixture firm gets one row in each of the ten tables, made by Dead
 -- Ringers. Then a professional at the firm, and then a manager
 -- (can_manage_settings() true), each in a pass that undoes itself (ZZ001),
 -- try every table: read the row, UPDATE it, DELETE it, INSERT a copy. Then the
@@ -221,7 +224,7 @@ COMMIT;
 --   r text := ''; n int; m int; t text; p text; w text; ins text; rd text; up text; de text;
 --   v_org uuid; v_user uuid; v_auth uuid := gen_random_uuid(); v_i1 uuid; v_i2 uuid;
 --   v_sec uuid; v_beh uuid; v_rub uuid; v_eval uuid; v_shop uuid;
---   k_rb uuid; k_fb uuid; k_ob uuid; k_oc uuid; k_rp uuid; k_rd uuid; k_re uuid;
+--   k_rb uuid; k_ob uuid; k_oc uuid; k_rp uuid; k_rd uuid; k_re uuid;
 --   keys jsonb;
 -- BEGIN
 --   r := r || 'policies now:' || chr(10) || COALESCE((
@@ -230,13 +233,17 @@ COMMIT;
 --                    FROM pg_policy p GROUP BY p.polrelid) x
 --            JOIN pg_class c ON c.oid = x.polrelid
 --           WHERE c.relnamespace = 'public'::regnamespace
---             AND c.relname IN ('rubrics','rubric_behaviors','focus_behaviors','evaluations','observations','shops',
+--             AND c.relname IN ('rubrics','rubric_behaviors','evaluations','observations','shops',
 --                               'shop_interactions','outcomes','reporting_periods','report_definitions','reports')), 'NONE')
---        || chr(10) || '   (expect <t>_read(r) <t>_write(*) on each of the eleven, nothing else)' || chr(10);
+--        || chr(10) || '   (expect <t>_read(r) <t>_write(*) on each of the ten, nothing else)' || chr(10);
 --   r := r || 'transcript_segments still carries: '
 --          || (SELECT string_agg(polname || '(' || polcmd::text || ')', ' ') FROM pg_policy
 --               WHERE polrelid = 'public.transcript_segments'::regclass)
 --          || '   (expect transcript_segments_tenant(*): not this file''s)' || chr(10);
+--   r := r || 'focus_behaviors still carries: '
+--          || (SELECT string_agg(polname || '(' || polcmd::text || ')', ' ') FROM pg_policy
+--               WHERE polrelid = 'public.focus_behaviors'::regclass)
+--          || '   (expect focus_behaviors_tenant(*): the firm''s choice, for the managers-only file)' || chr(10);
 --   r := r || 'the score functions carry the client-field rule: '
 --          || COALESCE(obj_description('composite_score(uuid)'::regprocedure, 'pg_proc') LIKE '%never enter this score%'
 --              AND obj_description('section_scores(uuid, date, date)'::regprocedure, 'pg_proc') LIKE '%never enter%', false)
@@ -263,8 +270,6 @@ COMMIT;
 --   INSERT INTO shops (organization_id) VALUES (v_org) RETURNING id INTO v_shop;
 --   INSERT INTO rubric_behaviors (rubric_id, behavior_id, possible_points, answered_by)
 --   VALUES (v_rub, v_beh, 1, 'reviewer') RETURNING id INTO k_rb;
---   INSERT INTO focus_behaviors (organization_id, behavior_id, focus_source)
---   VALUES (v_org, v_beh, 'client') RETURNING id INTO k_fb;
 --   INSERT INTO observations (organization_id, evaluation_id, behavior_id, opportunity, source)
 --   VALUES (v_org, v_eval, v_beh, true, 'reviewer') RETURNING id INTO k_ob;
 --   INSERT INTO shop_interactions (shop_id, interaction_id, attempt_number) VALUES (v_shop, v_i1, 1);
@@ -280,7 +285,6 @@ COMMIT;
 --   keys := jsonb_build_object(
 --     'rubrics',            jsonb_build_object('w', format('id = %L', v_rub)),
 --     'rubric_behaviors',   jsonb_build_object('w', format('id = %L', k_rb)),
---     'focus_behaviors',    jsonb_build_object('w', format('id = %L', k_fb)),
 --     'evaluations',        jsonb_build_object('w', format('id = %L', v_eval)),
 --     'observations',       jsonb_build_object('w', format('id = %L', k_ob)),
 --     'shops',              jsonb_build_object('w', format('id = %L', v_shop)),
@@ -340,7 +344,7 @@ COMMIT;
 --     GET DIAGNOSTICS n = ROW_COUNT; m := m + n;
 --   END LOOP;
 --   r := r || '-- as Dead Ringers (authenticated, app.is_internal on): tables updated '
---          || m || ' of 11   (expect 11)' || chr(10);
+--          || m || ' of 10   (expect 10)' || chr(10);
 --   DELETE FROM reports WHERE organization_id = v_org;
 --   GET DIAGNOSTICS n = ROW_COUNT;
 --   r := r || '   and can delete a report: ' || n || '   (expect 1)' || chr(10);
