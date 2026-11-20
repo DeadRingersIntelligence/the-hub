@@ -1084,15 +1084,17 @@ comparison again.
 - **One predicate,** because the alternative is the same `<=` / `<` written in
   three places, with one of them inclusive at the wrong end.
 
-**Open: `partner_access.revoked_on`** (review of `20261120T1800`). It's a dated
-grant (`granted_on` NOT NULL, `revoked_on`) and now the only one that doesn't
-ask `in_force()`: `partners_read` reads `revoked_on IS NULL`. The two disagree
-only when `revoked_on` is in the future. Two ways to settle it:
-- **A CHECK that `revoked_on` can't be in the future.** No access changes, the
-  two readings agree on every permitted value, and the column stops inviting a
-  scheduled revocation that it then ignores. Recommended.
-- **Rule that it is a schedule.** `partners_read` moves to `in_force()`, which
-  loosens access until the date, and Mandie signs off the loosening.
+**`partner_access.revoked_on` is not a schedule** (`20261120T1900`; review of
+`20261120T1800` and Mandie, 20 November). partner_access is a dated grant
+(`granted_on`, `revoked_on`), but `partners_read` reads `revoked_on IS NULL`,
+not `in_force()`. The two disagreed only for a future `revoked_on`, so a CHECK
+now forbids one. They agree on every value the column can hold, nobody's
+access changed, and the column no longer promises a scheduled revocation it
+ignores. Scheduled revocation ("end this consultancy on the 31st") would be a
+new feature with its own review, and it would loosen a consent rule. If it's
+ever built, `partners_read` moves to `in_force()` in the same file.
+`current_date` in a CHECK is safe here, because a date that was today or
+earlier stays earlier.
 
 **`client_type` sets the default only when a firm is set up**
 (`organizations_default_capabilities`, on insert). After that, the
