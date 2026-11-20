@@ -2,6 +2,16 @@
 -- 20261120T1510_cases_capability.sql
 -- The Hub — a firm has cases only while the capability is in force.
 --
+-- APPLIED to staging (15:00 UTC) and production (15:01 UTC), 20 Nov 2026,
+-- from commit 473d225, sha256 85105f43…17717dd2, loaded whole. ran_md5
+-- 57a71663ee9647b2f44f26351765e1c4 (27167 characters) on both, as predicted.
+-- Before the run, the executable lines were confirmed identical to df3881e's,
+-- the version reviewed before the comment fix. All 21 verification lines
+-- matched on both. Backfill: combo 1, funeral_home 4, internal 1, pet 1; no
+-- answering service and no existing case left without cases. The baseline
+-- moved acl to 45187, com to 9445, fn to 13114 and trg to 7002, each to the
+-- character, and nothing else moved. This note was added afterwards.
+--
 -- THE RULING (planning, 20 November):
 --
 --   * "Off" means no new case is created and no call is linked to a case.

@@ -335,8 +335,14 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261120T1500`**, run on both databases on 20 November and
-identical on both afterwards: `typ` (+6, `,cases`) and `com` (+32, a new
+**Last moved by `20261120T1510`**, run on both databases on 20 November and
+identical on both afterwards: `acl` (+339), `com` (+369), `fn` (+380) and `trg`
+(+302) moved for five new functions, a replaced body, their grants and
+comments, and three triggers. All four landed to the character, as
+predicted. `acl` was predicted from scratch, after checking that scratch
+measured `20261120T1100`'s four functions at exactly production's +297. **Scratch can predict `acl` for new functions**, because their grantees are
+the same on all three databases. **Before that, by `20261120T1500`**, run on
+both databases on 20 November and identical on both afterwards: `typ` (+6, `,cases`) and `com` (+32, a new
 `Y capability` key: 4 separator + 12 key + 4 arrow + 12 hash) moved, as
 predicted, and nothing else moved. **`mig` reads policies and the ledger
 table, not ledger rows**, so a file without policies leaves it alone.
@@ -376,14 +382,14 @@ md5 and length.
 
 | query | md5 | characters |
 |---|---|---|
-| `acl` | `0fce06c3e3ebc9394cdc1778cc1a56d4` | 44848 |
+| `acl` | `ce517eb73dbd1477734da0d47d3d45e1` | 45187 |
 | `col` | `02a3e69111b1c32f6813d652598e49c4` | 77025 |
-| `com` | `2d6a0fc29ba3183d97190c1a337403b9` | 9076 |
+| `com` | `6fe2c039606ed0d244480a757b95883a` | 9445 |
 | `con` | `e8ab294ac7fe127796b26c187060aa2a` | 50479 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `17e4fd595632abe15e821c6cc631d898` | 12734 |
+| `fn` | `3e02cfe98d49cc9f9372fa663020f3ae` | 13114 |
 | `mig` | `d52ddb026ebf4b8faef97c3453720cc4` | 16133 |
-| `trg` | `4f6f23e045b4e57357eda3c9c8332868` | 6700 |
+| `trg` | `d6c6d694bda5c5208185680326dc862a` | 7002 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
 
 **A migration applied to both databases moves the baseline, and the migration
