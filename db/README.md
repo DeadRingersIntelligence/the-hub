@@ -321,14 +321,20 @@ case_need_type` made a `Y case_need_type` key appear, the count went 147 → 148
 and the rollback returned it to `968257c6…`. So `Y = 0` means no type carries
 a comment, not that the query cannot see one.
 
-### The baseline, 19 November 2026
+### The baseline, 20 November 2026
 
 All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261119T1900`**, run on both databases on 19 November and
-identical on both afterwards: `fn`, `acl` and `com` moved for the new
+**Last moved by `20261120T1000`**, run on both databases on 20 November and
+identical on both afterwards: `fn` and `com` moved — four function bodies
+and one comment — and nothing else, as predicted before the run. `acl` held
+because `CREATE OR REPLACE` keeps grants. Their character counts did not
+change, and should not: both queries reduce each object to a 12-character
+hash, so a changed body moves the md5 and not the length. **Before that, by
+`20261119T1900`**, run on both databases on 19 November and identical on
+both afterwards: `fn`, `acl` and `com` moved for the new
 `decedent_status_for_need_type`, its grant and comment, and the two bodies
 that now call it; nothing else did, as predicted. **Before that, by
 `20261119T1800`**, run on both databases on 19 November and identical on
@@ -349,10 +355,10 @@ md5 and length.
 |---|---|---|
 | `acl` | `b332ea30488296d2a5a10afa89e4d3b8` | 44551 |
 | `col` | `02a3e69111b1c32f6813d652598e49c4` | 77025 |
-| `com` | `ef95bbcfe59659a72a6f6440f9ce00bb` | 8432 |
+| `com` | `2a2e3f472eb93159c0e43a2abbaa6cd4` | 8432 |
 | `con` | `e8ab294ac7fe127796b26c187060aa2a` | 50479 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `627476d92b04b3cf2d276d8c807bc617` | 11988 |
+| `fn` | `7e788ae72d7bde1753a699a7eb3783c4` | 11988 |
 | `mig` | `579d28a007a83087596f1844a804f8ec` | 15850 |
 | `trg` | `4f6f23e045b4e57357eda3c9c8332868` | 6700 |
 | `typ` | `53df0c832893897ebc8d4cddd4ac5c8d` | 6486 |
