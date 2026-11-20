@@ -335,8 +335,12 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261120T2000`**, run on both databases on 20 November and
-identical on both afterwards: `acl` (+388), `col` (+643), `com` (+445), `con`
+**Last moved by `20261120T2100`**, run on both databases on 20 November and
+identical on both afterwards: `acl`, `com` and `fn` moved by +11 each, to the
+character, as predicted. A signature grew from `…,text)` to
+`…,integer,integer)` in each function's key. Nothing else moved. **Before
+that, by `20261120T2000`**, run on both databases on 20 November and identical
+on both afterwards: `acl` (+388), `col` (+643), `com` (+445), `con`
 (+717), `fn` (+184) and `mig` (+336) moved for a new table, two new
 functions, a replaced body and policies, each to the character, as
 predicted. **Scratch can predict `acl` for a new table too, if 18 is added:**
@@ -403,12 +407,12 @@ md5 and length.
 
 | query | md5 | characters |
 |---|---|---|
-| `acl` | `868f92047ab1095e41d50a34fc1555e4` | 45730 |
+| `acl` | `fe367574655c232db1f57b2ef4f51e39` | 45741 |
 | `col` | `9e55fcb189031b6cfc3f563d243d2aed` | 77668 |
-| `com` | `f1bc231c089ce2cdef9963f7fa479173` | 11671 |
+| `com` | `4ca967fc07f8763229c03f1fbf88efe9` | 11682 |
 | `con` | `98873bfd819b0379975460932acc8d1b` | 51269 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `58751aa34da694c67e4652d003db160a` | 13525 |
+| `fn` | `2c90f764882bb3256e3e97f704aeb9a1` | 13536 |
 | `mig` | `88ebb78254ff2daa0ac8286cba945629` | 17719 |
 | `trg` | `d6c6d694bda5c5208185680326dc862a` | 7002 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
@@ -942,11 +946,17 @@ Dead Ringers.
   `[redacted]`, and `transcript_redactions` records who asked, who did it,
   when and why. It never stores the text or its length, and nobody can update
   or delete it.
-  - **Use whole-segment mode** for anything that must not be logged. Passage
-    mode sends the sensitive string in the request, where it lands in
-    Supabase's query history.
-  - **The right form is an offset variant**, (segment, start, length, reason),
-    so nothing sensitive travels. It's on the backlog.
+  - **The function takes a position, never the text** (`20261120T2100`):
+    `redact_transcript_segment(segment, requested_by, reason, start, length)`,
+    in characters from 1, or no position for the whole segment. Passage mode
+    is gone. Redact several spans in one segment from the last one backwards,
+    because `[redacted]` shifts later positions.
+  - **Finding the span is a read, and a read in the SQL editor goes into its
+    query history too.** The position form moved the hole from the write to
+    the read; it didn't close it. **Use whole-segment mode for anything that
+    must not be logged.** The real fix is a redaction screen in the app that
+    shows the segment and sends only the span. The function makes that screen
+    possible; it doesn't replace it.
   - **A redaction needs a real Dead Ringers user's session.** It records who
     did it, so it can't be run as `postgres` in the SQL editor, and it says so
     in words.
