@@ -19,12 +19,20 @@ table already exists. That is intended — a migration is a one-time change.
 
 Paste into the Supabase SQL Editor, one file per query, in order.
 
-### Four things that will happen
+### Five things that will happen
 
 **Supabase's row-level-security warning fires on data-only files.** Its scanner
 reads the word "their" inside a rubric question as a table name and warns about
 a `CREATE TABLE` that isn't there. If the file contains no `CREATE`, "Run
 without RLS" is correct. If it does contain `CREATE TABLE`, read it first.
+
+**A destructive-operation prompt fires on any `DROP`.** Since 20 November
+Supabase stops with "Potential issue detected — this query includes
+destructive operations" and waits for a click. `DROP POLICY` triggers it
+(first seen on `20261120T1400`), and so does a verification block, which
+ends in a rollback. It is expected for any reviewed file that contains a
+`DROP`. Confirm it only after checking that the file in the editor is the one
+whose hash was verified.
 
 **The editor rejects files over roughly 1 MB.** That is why migration 013 is
 split into six parts. Run them in letter order.
@@ -114,7 +122,7 @@ Before calling a mismatch drift, rule out five innocent causes:
   `-- source: dashboard` marker and removes everything after it, so a fourth
   line or a reordering is still stripped; a renamed marker is not.
 
-`ran_len` is the submitted length **in characters**, not bytes — tens means one
+`ran_len` is the submitted length **in characters**, not bytes (`wc -c` is bytes, and so is `wc -m` in the C locale; the em dashes make them differ: `20261120T1400` is 18540 bytes and 18504 characters) — tens means one
 statement was sent, thousands means a file was pasted. The text itself is never
 stored, only the hash and the length, because it carries the session's identity.
 
@@ -327,8 +335,12 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261120T1100`**, run on both databases on 20 November and
-identical on both afterwards: `fn`, `acl` and `com` moved for four NEW
+**Last moved by `20261120T1400`**, run on both databases on 20 November and
+identical on both afterwards: `com` (+419, six new policy comments) and `mig`
+(+283, the ledger row and three policies replaced by six) moved, as predicted to
+the character, and nothing else moved. `acl` held, because the grants were kept
+deliberately. **Before that, by `20261120T1100`**, run on both databases on 20
+November and identical on both afterwards: `fn`, `acl` and `com` moved for four NEW
 functions, their grants and comments, and nothing else, as predicted. This
 time the lengths grew too (`fn` +746, `acl` +297, `com` +193), the contrast
 worth knowing: **a changed body moves a row's md5 alone; a new object moves
@@ -361,11 +373,11 @@ md5 and length.
 |---|---|---|
 | `acl` | `0fce06c3e3ebc9394cdc1778cc1a56d4` | 44848 |
 | `col` | `02a3e69111b1c32f6813d652598e49c4` | 77025 |
-| `com` | `44da8d7b3470a8dfeec6392233748338` | 8625 |
+| `com` | `e5386fef5dd8c0ae5c5e2684e6e693fd` | 9044 |
 | `con` | `e8ab294ac7fe127796b26c187060aa2a` | 50479 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
 | `fn` | `17e4fd595632abe15e821c6cc631d898` | 12734 |
-| `mig` | `579d28a007a83087596f1844a804f8ec` | 15850 |
+| `mig` | `d52ddb026ebf4b8faef97c3453720cc4` | 16133 |
 | `trg` | `4f6f23e045b4e57357eda3c9c8332868` | 6700 |
 | `typ` | `53df0c832893897ebc8d4cddd4ac5c8d` | 6486 |
 
@@ -846,6 +858,66 @@ did not find these because it asked whether each policy was *scoped*, which
 every one was. What found them was reading them. The scan that would work is a
 list of tables the application never writes, checked against the policies that
 permit writes, and it needs the application rather than the database.
+
+### The firm's data, or Dead Ringers' configuration
+
+A scoped `FOR ALL` policy — `USING (is_internal() OR organization_id =
+current_organization_id())`, with 024's identical `WITH CHECK` — is the house
+pattern for the firm's own data, and correct there: the firm's cases, contacts
+and calls are the firm's to change. **It is wrong on a table that records what
+Dead Ringers has sold or agreed to**, because there it lets the customer write
+the terms. Before writing a firm-scoped policy, ask: *is this the firm's data,
+or Dead Ringers' configuration?* Configuration gets the `organizations` shape
+below — `FOR SELECT` for the firm, `is_internal()` for writes — and not
+`can_manage_settings()`, since a manager is a member of the firm being sold to.
+
+Changed for this reason in `20261120T1400`: `organization_capabilities`,
+`client_entitlements`, `retention_policies`. Any member of a firm could switch
+on a capability, raise a purchased quantity or turn off the storage fee.
+
+`retention_policies` was kept in for a reason beyond the fee (planning, 20
+November): a firm quietly shortening retention destroys recordings and
+transcripts, which are evidence. Different retention is a conversation with
+Dead Ringers.
+
+**Ruled, not yet built (planning, 20 November):**
+
+- **The evaluation product**: same fix, in its own file, after checking the
+  application never writes any of them. It covers `evaluations`, `observations`,
+  `shops`, `shop_interactions`, `outcomes`, `reports`, `report_definitions` and
+  `reporting_periods`. It also covers the rubric tables: `rubrics`,
+  `rubric_behaviors`, `focus_behaviors`, `rubric_sections` and
+  `rubric_templates`, plus `behaviors`, `behavior_answers` and
+  `shopper_forms`: Dead Ringers' catalogue and findings.
+  **`transcript_segments` is locked by the same file, for a different reason,
+  and its comment must say so.** A transcript is not a finding about the firm.
+  It is the system's record of the firm's own call, and nobody hand-writes
+  one, so the reason is evidence integrity, not ownership. It sits under the
+  retention terms `20261120T1400` locked: a firm that can't shorten retention
+  but can edit transcripts has the same hole through a different door.
+  **Open: may a firm ever redact a transcript** (a caller's card number read
+  aloud, say)? If so, it needs a deliberate function that records what was
+  removed and by whom, never a general write permission. This needs
+  settling; it must not be answered by silence. **The rubric, the focus behaviours
+  and the scoring are Dead Ringers' and proprietary (Mandie, 20 November). No
+  product exception.**
+- **A client's own measure is never a rubric row.** If clients could add
+  measures to `rubric_behaviors`, the rubric tables could never be locked, and
+  a client's additions would be indistinguishable from Dead Ringers' scoring.
+  Client measures belong in the custom-field machinery
+  (`custom_field_definitions`, `custom_field_values`). It is firm-writable,
+  and the lockdown leaves it alone. Today it attaches only to contacts and
+  cases (`custom_field_entity`), so a client measure on an evaluation has
+  nowhere to live yet. Making it real is its own item: add `evaluation` to the
+  enum (two-pass), add a column on `custom_field_values`, and build the UI.
+- **A client field is recorded alongside an evaluation and never enters the
+  score.** The score is computed in `composite_score()` and `section_scores()`.
+  The rule goes in their `COMMENT ON FUNCTION`, in whichever of those two
+  files runs first. It goes there, not only in the UI, so that it isn't
+  assumed separately in three places.
+- **`partner_access`** stays the firm's to give, as consent, but gated to
+  managers: the `picklist_items` shape, split per command with
+  `can_manage_settings()`.
 
 ### Which lock to use when a table should not be written
 
