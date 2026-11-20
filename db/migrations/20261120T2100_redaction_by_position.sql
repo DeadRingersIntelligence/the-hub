@@ -2,6 +2,23 @@
 -- 20261120T2100_redaction_by_position.sql
 -- The Hub — a redaction names where the text is, never what it says.
 --
+-- APPLIED to staging (18:09 UTC) and production (18:12 UTC), 20 Nov 2026,
+-- loaded whole. ran_md5 072d5079653eae36a5071fced6ff828e (13431 characters)
+-- on both, as predicted. All 12 verification lines matched on both. The
+-- baseline moved acl to 45741, com to 11682 and fn to 13536, each to the
+-- character, and nothing else moved. This note was added afterwards.
+--
+-- CORRECTION FROM REVIEW AFTER THE RUN. "Dead Ringers already reads the
+-- segment to find the span, so nothing sensitive travels in the call" is true
+-- of the call, not of the session. Finding the span means reading the
+-- transcript, and a read done in the SQL editor puts the text in its query
+-- history anyway. The hole moved from the write to the read; it didn't close.
+-- THE OPERATING RULE STAYS: whole-segment mode for anything that must not be
+-- logged. The real fix is a redaction screen in the app, which shows the
+-- segment and sends only the span. This file makes that screen possible; it
+-- doesn't replace it. Recorded in db/README.md under the transcript write
+-- paths.
+--
 -- WHAT IS WRONG. redact_transcript_segment() (20261120T2000) has two modes.
 -- Whole segment sends no text. Passage mode takes p_passage, the exact string
 -- to remove, so the call itself carries it: redacting a card number by
