@@ -999,8 +999,8 @@ to copy from.
 
 No function for this exists yet and none is being written in advance. The
 semantics a helper would have to fix — whether an agreement is in force *on*
-the day it was revoked, whether the `covers_` bounds are inclusive — are
-decisions that belong to whoever has a consumer in front of them, and a helper
+the day it was revoked (now answered: it is not; see "Dated grants" below),
+whether the `covers_` bounds are inclusive — are decisions that belong to whoever has a consumer in front of them, and a helper
 with invented answers to them would look more authoritative than it is. What
 is worth having in advance is this paragraph.
 
@@ -1023,9 +1023,11 @@ then say so, in a sentence, at the moment the second one exists.
 
 Anything granted for a period (a capability, a data-sharing agreement) is
 asked about through **one predicate, `in_force(from, until, on)`**
-(`20261120T1510`): **in force from `from`, out of force from `until`, both
-inclusive.** A capability with `disabled_on` the 20th is off all day on the
-20th. `capability_in_force()` calls it, and `has_capability()` calls that. A
+(`20261120T1510`): **in force when `from <= on < until`.** A capability with
+`enabled_on` the 10th is on all day on the 10th. One with `disabled_on` the 20th
+is off all day on the 20th. A null `until` means no end. A null `from` gives
+null, never true, so an unrecorded start grants nothing; a caller that means
+"since always" writes `COALESCE(from, '-infinity')` and says why. `capability_in_force()` calls it, and `has_capability()` calls that. A
 future `agreement_in_force()` must call it too, rather than write the
 comparison again.
 

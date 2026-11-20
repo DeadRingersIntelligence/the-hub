@@ -11,8 +11,9 @@
 --     (20261120T1100) are not gated.
 --   * The capability is stored explicitly. client_type picks the default when
 --     a firm is set up, and never again.
---   * Dates, not timestamps: on from enabled_on, off from disabled_on, both
---     inclusive. The date predicate is written once.
+--   * Dates, not timestamps: in force from enabled_on, that day included;
+--     out of force from disabled_on, that day included. The date predicate is
+--     written once.
 --   * An answering service's cases, if any, live in its own case-management
 --     system, so cases are off for one by default. Nothing here makes "a
 --     call's case reference must point at a Hub case row" harder to change.
@@ -115,9 +116,13 @@ RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
 $$;
 
 COMMENT ON FUNCTION in_force(date, date, date) IS
-  'The one statement of when a dated grant applies: on from p_from, off from '
-  'p_until, both inclusive. A grant ending on the 20th is out of force all of '
-  'the 20th. Dates, not timestamps, so a revocation can''t be said to take '
+  'The one statement of when a dated grant applies: in force on p_on when '
+  'p_from <= p_on < p_until. A grant starting on the 10th is in force all of '
+  'the 10th; a grant ending on the 20th is out of force all of the 20th. A '
+  'NULL p_until means no end. A NULL p_from or p_on gives NULL, never true, so '
+  'an unrecorded start grants nothing; a caller that means "since always" '
+  'must say so, with COALESCE(p_from, ''-infinity''). Dates, not timestamps, '
+  'so a revocation can''t be said to take '
   'effect at 2pm; and where a date is ambiguous, the rule errs towards less '
   'access, which is right for consent. Every "is this in force" question calls '
   'this: capability_in_force() now, agreement_in_force() when it exists '
@@ -186,7 +191,13 @@ COMMENT ON FUNCTION organizations_default_capabilities() IS
   'When a firm is created: cases, unless it is an answering service, whose cases '
   'live in its own system. On INSERT only. client_type picks the default and '
   'nothing more; after that the organization_capabilities row is the truth, '
-  'and Dead Ringers changes it there (20261120T1510).';
+  'and Dead Ringers changes it there (20261120T1510). INVOKER, and it writes '
+  'organization_capabilities, which only Dead Ringers may write '
+  '(20261120T1400): it works because only Dead Ringers or a BYPASSRLS role can '
+  'create a firm. If firms ever self-register, creation fails here with a row-'
+  'level-security error. The answer then is a reviewed SECURITY DEFINER sign-up '
+  'path that sets the capabilities itself, not making this trigger DEFINER, '
+  'which would be a write path around the lock.';
 
 CREATE TRIGGER organizations_default_capabilities_t
   AFTER INSERT ON organizations
@@ -353,7 +364,7 @@ COMMIT;
 --          || in_force('2026-01-10', '2026-01-20', '2026-01-10') || '/'
 --          || in_force('2026-01-10', '2026-01-20', '2026-01-19') || '/'
 --          || in_force('2026-01-10', '2026-01-20', '2026-01-20')
---          || '   (expect false/true/true/false: on from, off from, both inclusive)' || chr(10);
+--          || '   (expect false/true/true/false: in force from the 10th, out of force from the 20th)' || chr(10);
 --   r := r || '    with no end, years later: ' || in_force('2026-01-10', NULL, '2099-01-01')
 --          || '   (expect true)' || chr(10);
 --   r := r || 'A6. has_capability calls capability_in_force: '
