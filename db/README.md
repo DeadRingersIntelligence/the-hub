@@ -335,7 +335,19 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261120T2200`**, run on both databases on 20 November and
+**Last moved by `20261120T2300`**, run on both databases on 20 November and
+identical on both afterwards. All nine matched the predicted table: `acl` (−148),
+`com` (+248), `fn` (+18) and `mig` (+24) moved, and the other five held. Review
+derived three from first principles before the run:
+- **`acl` −148:** six revoked table grants at 21 characters each with their
+  commas (126), plus `authenticated:EXECUTE` (22). Column grants such as
+  `UPDATE (read_at)` are not in `acl`.
+- **`fn` +18:** `search_path=public` arriving in `proconfig`. `invoker` and
+  `definer` are both seven characters.
+- **`mig` +24:** four renamed policies (−6), roles public→authenticated four
+  times (+28), the log's ALL→SELECT (+3), FORCE false→true (−1).
+
+**Before that, by `20261120T2200`**, run on both databases on 20 November and
 identical on both afterwards. All nine matched the predicted table: `acl`
 (+500), `col` (+141), `com` (+489), `con` (−40), `fn` (+638) and `trg` (+82)
 moved, and `defacl`, `mig` and `typ` held. **`con` can go down:** a UNIQUE
@@ -412,13 +424,13 @@ md5 and length.
 
 | query | md5 | characters |
 |---|---|---|
-| `acl` | `ae450d99b756f68db751c2070ba8e2af` | 46241 |
+| `acl` | `f9804fca07a295a7e0b8d73ffc6f4450` | 46093 |
 | `col` | `01d89a8b21f8c57bd5232fee77209467` | 77809 |
-| `com` | `eaa61b15903413889a7bf36a175ee77e` | 12171 |
+| `com` | `ca65ff7809ad64098bca1efea22f16ec` | 12419 |
 | `con` | `a0f9680beb1354c63e09bee1b0cd175d` | 51229 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `6c3080a9211c4ad59e925c776b4cf738` | 14174 |
-| `mig` | `88ebb78254ff2daa0ac8286cba945629` | 17719 |
+| `fn` | `6110e9eee72116c9ec40dc6e2a5f9b0d` | 14192 |
+| `mig` | `8960a2368bcb39a1f292a193a4271874` | 17743 |
 | `trg` | `016fee0defb25d359e0aabeba8f93c8e` | 7084 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
 
@@ -1001,6 +1013,17 @@ Dead Ringers.
   `partner_access` is the firm's consent to give: managers grant and revoke,
   and only Dead Ringers deletes. `focus_behaviors` is the firm's choice of
   what to work on: managers write `focus_source = 'client'` rows only.
+
+### Notifications are the person's, not the firm's
+
+`notifications`, `notification_preferences` and `notification_log` are scoped
+by user (`20261120T2300`). They're the one family of tables in the Hub where
+the firm doesn't own the row. Neither a manager nor Dead Ringers reads someone
+else's, and that's deliberate: no screen reads across users. If a delivery
+pipeline or a support screen ever needs to, build that read as a named screen
+with a reviewed function behind it. Don't put `is_internal()` back in a
+policy. The pipeline writes as `service_role`, which needs its own grants on
+`notification_log`: today it holds only REFERENCES.
 
 ### Evidence isn't erased by the party it concerns
 
