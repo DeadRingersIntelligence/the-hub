@@ -335,8 +335,11 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261120T1700`**, run on both databases on 20 November and
-identical on both afterwards: `com` (+1137, twenty policy comments and two
+**Last moved by `20261120T1800`**, run on both databases on 20 November and
+identical on both afterwards: `com` (+468) and `mig` (+484) moved for two
+tables' policies, split per command, and their comments, to the character,
+as predicted. Nothing else moved. **Before that, by `20261120T1700`**, run on
+both databases on 20 November and identical on both afterwards: `com` (+1137, twenty policy comments and two
 function comments) and `mig` (+766, ten policies replaced by twenty) moved,
 to the character, as predicted. `acl` held, because the grants were kept.
 **Before that, by `20261120T1600`**, run on both databases on 20 November and
@@ -391,11 +394,11 @@ md5 and length.
 |---|---|---|
 | `acl` | `281e702301326b33242c9317641d6e13` | 45342 |
 | `col` | `02a3e69111b1c32f6813d652598e49c4` | 77025 |
-| `com` | `aa5b7876bc74cf148b1c1ccdba690971` | 10685 |
+| `com` | `f9820f25aff742cfabdf896e9dd17c39` | 11153 |
 | `con` | `e8ab294ac7fe127796b26c187060aa2a` | 50479 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
 | `fn` | `1d483c510e32f8dc625f04f9420f4290` | 13341 |
-| `mig` | `ceb450571fd9eb8c1f014f1aec3292e5` | 16899 |
+| `mig` | `c1787e211d20529075bd1a1b189aedbd` | 17383 |
 | `trg` | `d6c6d694bda5c5208185680326dc862a` | 7002 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
 
@@ -940,10 +943,26 @@ Dead Ringers.
   score.** The score is computed in `composite_score()` and `section_scores()`.
   The rule is in their `COMMENT ON FUNCTION`, added by `20261120T1700`. It goes there, not only in the UI, so that it isn't
   assumed separately in three places.
-- **The managers-only file: `partner_access` and `focus_behaviors`.** Both
-  stay the firm's, gated to managers: the `picklist_items` shape, split per
-  command with `can_manage_settings()`. `partner_access` is the firm's consent
-  to give; `focus_behaviors` is the firm's choice of what to work on.
+- **The managers-only file: `20261120T1800`, applied 20 November.**
+  `partner_access` and `focus_behaviors` stay the firm's, gated to managers:
+  the `picklist_items` shape, split per command with `can_manage_settings()`.
+  `partner_access` is the firm's consent to give: managers grant and revoke,
+  and only Dead Ringers deletes. `focus_behaviors` is the firm's choice of
+  what to work on: managers write `focus_source = 'client'` rows only.
+
+### Evidence isn't erased by the party it concerns
+
+The same principle decided three things on 20 November:
+- a firm can't shorten its retention (`20261120T1400`);
+- a firm can revoke a consultancy's access but not delete the grant
+  (`20261120T1800`);
+- a firm can't edit a transcript (the `transcript_segments` file, to come).
+
+**A consent record, a recording, and a transcript are evidence,** and the
+party they concern doesn't get to erase them. When a new table holds a record
+someone might later need to rely on against the firm, ask this before giving
+the firm `DELETE`. The firm's way out is a dated end (`revoked_on`,
+`disabled_on`), never removing the row.
 
 ### Which lock to use when a table should not be written
 
@@ -1064,6 +1083,16 @@ comparison again.
   the same direction of error, and accepted.
 - **One predicate,** because the alternative is the same `<=` / `<` written in
   three places, with one of them inclusive at the wrong end.
+
+**Open: `partner_access.revoked_on`** (review of `20261120T1800`). It's a dated
+grant (`granted_on` NOT NULL, `revoked_on`) and now the only one that doesn't
+ask `in_force()`: `partners_read` reads `revoked_on IS NULL`. The two disagree
+only when `revoked_on` is in the future. Two ways to settle it:
+- **A CHECK that `revoked_on` can't be in the future.** No access changes, the
+  two readings agree on every permitted value, and the column stops inviting a
+  scheduled revocation that it then ignores. Recommended.
+- **Rule that it is a schedule.** `partners_read` moves to `in_force()`, which
+  loosens access until the date, and Mandie signs off the loosening.
 
 **`client_type` sets the default only when a firm is set up**
 (`organizations_default_capabilities`, on insert). After that, the
