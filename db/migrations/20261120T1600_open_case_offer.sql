@@ -2,6 +2,29 @@
 -- 20261120T1600_open_case_offer.sql
 -- The Hub — a call from a number already on an open case is offered to it.
 --
+-- APPLIED to staging (16:43 UTC) and production (16:44 UTC), 20 Nov 2026,
+-- from commit 0840067, sha256 101f7208…12a1b93a, loaded whole. ran_md5
+-- 9b829c7864190172d8bd73f83d371b66 (16848 characters) on both, as predicted.
+-- All 12 verification lines matched on both. The baseline moved acl to 45342,
+-- com to 9548 and fn to 13341, each to the character, and nothing else moved.
+-- This note was added afterwards.
+--
+-- RULINGS AT REVIEW, recorded here. The comments below are left as they ran;
+-- the next file that touches either function re-issues its comment with
+-- these limits named:
+--
+--   * "Open" stands as not lost and not served. THE KNOWN LIMIT: a call after
+--     the service isn't offered, so a family ringing about the invoice or the
+--     headstone stays unlinked. If that bites, the fix is a closed state
+--     distinct from served, read by case_is_open_for() and nothing else.
+--   * ROUTE 3 PROPAGATES A WRONG LINK. If an earlier call from a number was
+--     put on the wrong case, every later call from that number is offered the
+--     same wrong case. It's bounded by the human click, but it makes a
+--     mistake easier to repeat than to notice.
+--   * A DECLINED OFFER, if it's ever remembered, is about a (call, case)
+--     pair, not a call. Copy contact_merge_dismissals rather than inventing a
+--     pattern.
+--
 -- WHY. Backlog item 6, settled as design B (planning, 20 November). When a
 -- call arrives from a number already on an open case, offer to join it. This
 -- is the offer the app already makes at case creation (a contact's other

@@ -335,8 +335,11 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261120T1510`**, run on both databases on 20 November and
-identical on both afterwards: `acl` (+339), `com` (+369), `fn` (+380) and `trg`
+**Last moved by `20261120T1600`**, run on both databases on 20 November and
+identical on both afterwards: `acl` (+155), `com` (+103) and `fn` (+227) moved
+for two new functions, their grants and comments, to the character, as
+predicted. Nothing else moved. **Before that, by `20261120T1510`**, run on
+both databases on 20 November and identical on both afterwards: `acl` (+339), `com` (+369), `fn` (+380) and `trg`
 (+302) moved for five new functions, a replaced body, their grants and
 comments, and three triggers. All four landed to the character, as
 predicted. `acl` was predicted from scratch, after checking that scratch
@@ -382,12 +385,12 @@ md5 and length.
 
 | query | md5 | characters |
 |---|---|---|
-| `acl` | `ce517eb73dbd1477734da0d47d3d45e1` | 45187 |
+| `acl` | `281e702301326b33242c9317641d6e13` | 45342 |
 | `col` | `02a3e69111b1c32f6813d652598e49c4` | 77025 |
-| `com` | `6fe2c039606ed0d244480a757b95883a` | 9445 |
+| `com` | `913ddea56dda3da3ca24062d9c511e63` | 9548 |
 | `con` | `e8ab294ac7fe127796b26c187060aa2a` | 50479 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `3e02cfe98d49cc9f9372fa663020f3ae` | 13114 |
+| `fn` | `1d483c510e32f8dc625f04f9420f4290` | 13341 |
 | `mig` | `d52ddb026ebf4b8faef97c3453720cc4` | 16133 |
 | `trg` | `d6c6d694bda5c5208185680326dc862a` | 7002 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
@@ -1054,6 +1057,29 @@ comparison again.
 (`organizations_default_capabilities`, on insert). After that, the
 `organization_capabilities` row is the truth. Changing a firm's `client_type`
 later doesn't switch anything on or off.
+
+## An open case, and the offer to join it
+
+**`case_is_open_for(status, served_on)` is the one statement of "open"**
+(`20261120T1600`): not lost, and no confirmed service date. On hold is open,
+and a booked date doesn't close a case. Anything that asks "is this case still
+going" calls it.
+
+**The case being open is the window for offering a new call to it**
+(`open_cases_for_call`), with no day-count lookback (planning, 20 November).
+Openness covers both rhythms measured: an answering service called back within
+the day, families over days. A day count would be a constant to tune per firm.
+
+Known limits, ruled at review:
+
+- **A call after the service isn't offered.** A family ringing about the
+  invoice or the headstone stays unlinked. If that bites, add a closed state
+  distinct from served, read by `case_is_open_for()` alone.
+- **A wrong link repeats.** The third route offers a case because the number
+  called on it before, so one call on the wrong case makes every later call
+  from that number offer the same wrong case. A person still has to click.
+- **A decline isn't remembered yet.** When it is, it's about a (call, case)
+  pair. `contact_merge_dismissals` is the pattern to copy.
 
 ## SECURITY DEFINER functions
 
