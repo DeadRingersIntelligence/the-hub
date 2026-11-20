@@ -2,6 +2,29 @@
 -- 20261120T1800_managers_decide.sql
 -- The Hub — a firm's consent and a firm's focus are decided by its managers.
 --
+-- APPLIED to staging (17:22 UTC) and production (17:23 UTC), 20 Nov 2026,
+-- from commit 083db75, sha256 3ef940df…a1166fcb, loaded whole. ran_md5
+-- dd99ad454d309fb3c8d82f7e6ade45b2 (17712 characters) on both, as predicted.
+-- The verification matched line for line on both. The baseline moved com to
+-- 11153 and mig to 17383, each to the character, and nothing else moved.
+-- This note was added afterwards.
+--
+-- RULINGS AT REVIEW, recorded here:
+--
+--   * REVOKE, DON'T DELETE, NOW HAS A NAME: a consent record is evidence,
+--     and the party it concerns doesn't erase it. It's the same principle as
+--     the retention lock (20261120T1400) and the transcript lock still to
+--     come. db/README.md, "Evidence isn't erased by the party it concerns".
+--   * revoked_on NEEDS A DECISION, NOT A FOOTNOTE. partner_access has
+--     granted_on NOT NULL and revoked_on: exactly the dated grant in_force()
+--     was written for, and now the only one that doesn't ask it.
+--     partners_read reads revoked_on IS NULL. The two differ only for a
+--     revoked_on in the future. Either a CHECK forbids a future revoked_on
+--     (no access changes, and the column stops inviting a schedule it then
+--     ignores), or revoked_on is ruled a schedule and partners_read moves to
+--     in_force(), with Mandie signing off the loosening. Open; recorded in
+--     db/README.md, "Dated grants".
+--
 -- WHAT IS WRONG. partner_access and focus_behaviors each carry one firm-scoped
 -- FOR ALL policy, <t>_tenant, with 024's identical WITH CHECK. authenticated
 -- holds INSERT, UPDATE and DELETE on both. So any member of a firm, at any
