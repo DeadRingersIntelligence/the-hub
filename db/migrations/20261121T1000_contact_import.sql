@@ -224,80 +224,125 @@ COMMENT ON COLUMN contacts.import_id IS
 -- -----------------------------------------------------------------------------
 CREATE FUNCTION contact_import_classify(p_org uuid, p_rows jsonb)
 RETURNS SETOF jsonb LANGUAGE plpgsql STABLE AS $$
+-- ONE PASS OVER THE FILE (review of #64). The file is expanded once into
+-- (row, number) pairs, each number normalised once; in-file duplicates,
+-- staff numbers and existing contacts are then found by grouping and joining
+-- those pairs, not by re-reading the file for every row. The first version
+-- did the in-file check inside the per-row loop, which is N squared: see the
+-- timings in the header.
 DECLARE
-  r record; n int; v_full text; v_biz text; v_email text;
-  v_raw text; v_e164 text; v_nums text[]; v_bad text; v_staff text; v_dups int[];
-  v_matches uuid[]; v_c record; v_fills jsonb; v_diff jsonb; v_new text[]; v_cands jsonb;
+  r record; v_full text; v_biz text; v_email text;
+  v_c record; v_fills jsonb; v_diff jsonb; v_new text[]; v_cands jsonb;
 BEGIN
-  FOR r IN SELECT (e.ord)::int AS row_no, e.val FROM jsonb_array_elements(p_rows) WITH ORDINALITY e(val, ord) LOOP
+  -- PLANNED FRESH ON EVERY CALL (EXECUTE, not a cached plan). Measured: with
+  -- the plan cached, a preview after a 5,000-row commit in the same session
+  -- took 5 min 50 s against 0.5 s before it, because the plan made against
+  -- the small book was reused against the large one. A fresh plan costs about
+  -- a millisecond and sizes the tables as they are now.
+  -- Shaped so the planner can't turn it into nested loops: it misjudges
+  -- anything built from jsonb_array_elements (it assumes ~100 rows), so
+  -- the per-phone work is done in ONE scan (the staff label and the
+  -- existing-contact lookup are indexed point lookups per phone), in-file
+  -- duplicates come from a window over the number (one sort), and only
+  -- per-row aggregates are joined, by row number. Measured at 5,000 rows:
+  -- see the header.
+  FOR r IN EXECUTE $q$
+    WITH rws AS MATERIALIZED (
+      SELECT (e.ord)::int AS row_no, e.val FROM jsonb_array_elements($2) WITH ORDINALITY e(val, ord)),
+    ph AS MATERIALIZED (
+      SELECT x.row_no, (p.ord)::int AS ph_ord, btrim(p.val ->> 'number') AS raw,
+             normalize_e164(btrim(p.val ->> 'number')) AS e164
+        FROM rws x, jsonb_array_elements(COALESCE(x.val -> 'phones', '[]')) WITH ORDINALITY p(val, ord)
+       WHERE btrim(COALESCE(p.val ->> 'number', '')) <> ''),
+    w AS MATERIALIZED (
+      SELECT q.*,
+             CASE WHEN q.ok THEN firm_only_number($1, q.e164) END AS staff,
+             CASE WHEN q.ok THEN (SELECT array_agg(DISTINCT COALESCE(c.merged_into, c.id))
+                                    FROM contact_phones cp JOIN contacts c ON c.id = cp.contact_id
+                                   WHERE cp.organization_id = $1 AND cp.e164 = q.e164) END AS cids,
+             CASE WHEN q.ok THEN array_agg(q.row_no) OVER (PARTITION BY q.e164) END AS sharers
+        FROM (SELECT ph.*, (ph.e164 IS NOT NULL AND is_e164(ph.e164)) AS ok FROM ph) q),
+    row_nums AS (
+      SELECT row_no, array_agg(e164 ORDER BY first_ord) AS nums
+        FROM (SELECT row_no, e164, min(ph_ord) AS first_ord FROM w WHERE ok GROUP BY row_no, e164) t
+       GROUP BY row_no),
+    row_bad AS (
+      SELECT row_no, (array_agg(raw ORDER BY ph_ord))[1] AS raw FROM w WHERE NOT ok GROUP BY row_no),
+    row_staff AS (
+      SELECT row_no, (array_agg(staff ORDER BY ph_ord))[1] AS lbl FROM w WHERE staff IS NOT NULL GROUP BY row_no),
+    row_dups AS (
+      SELECT w.row_no, array_agg(DISTINCT o ORDER BY o) AS dups
+        FROM w CROSS JOIN LATERAL unnest(w.sharers) o
+       WHERE o <> w.row_no GROUP BY w.row_no),
+    row_match AS (
+      SELECT w.row_no, array_agg(DISTINCT c) AS cids
+        FROM w CROSS JOIN LATERAL unnest(w.cids) c GROUP BY w.row_no)
+    SELECT x.row_no, x.val, COALESCE(n.nums, '{}') AS nums, bd.raw AS bad, st.lbl AS staff,
+           d.dups, m.cids AS matches
+      FROM rws x
+      LEFT JOIN row_nums n USING (row_no) LEFT JOIN row_bad bd USING (row_no)
+      LEFT JOIN row_staff st USING (row_no) LEFT JOIN row_dups d USING (row_no)
+      LEFT JOIN row_match m USING (row_no)
+     ORDER BY x.row_no
+  $q$ USING p_org, p_rows
+  LOOP
     v_full  := NULLIF(btrim(COALESCE(r.val ->> 'full_name', '')), '');
     v_biz   := NULLIF(btrim(COALESCE(r.val ->> 'business_name', '')), '');
     v_email := NULLIF(btrim(COALESCE(r.val ->> 'email', '')), '');
-    v_nums := '{}'; v_bad := NULL; v_staff := NULL;
-    FOR v_raw IN SELECT btrim(COALESCE(p ->> 'number', '')) FROM jsonb_array_elements(COALESCE(r.val -> 'phones', '[]')) p LOOP
-      CONTINUE WHEN v_raw = '';
-      v_e164 := normalize_e164(v_raw);
-      IF v_e164 IS NULL OR NOT is_e164(v_e164) THEN v_bad := COALESCE(v_bad, v_raw); CONTINUE; END IF;
-      IF NOT v_e164 = ANY (v_nums) THEN v_nums := v_nums || v_e164; END IF;
-      v_staff := COALESCE(v_staff, firm_only_number(p_org, v_e164));
-    END LOOP;
 
     IF v_full IS NULL AND v_biz IS NULL THEN
       RETURN NEXT jsonb_build_object('row', r.row_no, 'verdict', 'refused', 'reason', 'a contact needs a name');
       CONTINUE;
     END IF;
-    IF v_bad IS NOT NULL THEN
+    IF r.bad IS NOT NULL THEN
       RETURN NEXT jsonb_build_object('row', r.row_no, 'verdict', 'refused',
-        'reason', format('"%s" isn''t a phone number', v_bad));
+        'reason', format('"%s" isn''t a phone number', r.bad));
       CONTINUE;
     END IF;
-    IF v_staff IS NOT NULL THEN
+    IF r.staff IS NOT NULL THEN
       RETURN NEXT jsonb_build_object('row', r.row_no, 'verdict', 'refused',
-        'reason', format('a number on this row is in the directory as %s, so it belongs to the firm, not to a contact', v_staff));
+        'reason', format('a number on this row is in the directory as %s, so it belongs to the firm, not to a contact', r.staff));
+      CONTINUE;
+    END IF;
+    IF r.dups IS NOT NULL THEN
+      RETURN NEXT jsonb_build_object('row', r.row_no, 'verdict', 'held', 'hold', 'in_file', 'numbers', to_jsonb(r.nums),
+        'reason', format('row %s of the file has the same number: fix the file', array_to_string(r.dups, ', ')));
       CONTINUE;
     END IF;
 
-    -- The same number on another row of the file.
-    SELECT array_agg(DISTINCT (o.ord)::int ORDER BY (o.ord)::int) INTO v_dups
-      FROM jsonb_array_elements(p_rows) WITH ORDINALITY o(val, ord),
-           jsonb_array_elements(COALESCE(o.val -> 'phones', '[]')) op
-     WHERE (o.ord)::int <> r.row_no
-       AND normalize_e164(btrim(COALESCE(op ->> 'number', ''))) = ANY (v_nums);
-    IF v_dups IS NOT NULL THEN
-      RETURN NEXT jsonb_build_object('row', r.row_no, 'verdict', 'held', 'hold', 'in_file', 'numbers', to_jsonb(v_nums),
-        'reason', format('row %s of the file has the same number: fix the file', array_to_string(v_dups, ', ')));
-      CONTINUE;
-    END IF;
-
-    -- Contacts already holding these numbers, following merged_into.
-    SELECT array_agg(DISTINCT COALESCE(c.merged_into, c.id)) INTO v_matches
-      FROM contact_phones cp JOIN contacts c ON c.id = cp.contact_id
-     WHERE cp.organization_id = p_org AND cp.e164 = ANY (v_nums);
-
-    IF v_matches IS NULL THEN
+    IF r.matches IS NULL THEN
       RETURN NEXT jsonb_build_object('row', r.row_no,
-        'verdict', CASE WHEN cardinality(v_nums) = 0 THEN 'create_no_number' ELSE 'create' END,
-        'numbers', to_jsonb(v_nums),
-        'reason', CASE WHEN cardinality(v_nums) = 0
+        'verdict', CASE WHEN cardinality(r.nums) = 0 THEN 'create_no_number' ELSE 'create' END,
+        'numbers', to_jsonb(r.nums),
+        'reason', CASE WHEN cardinality(r.nums) = 0
                        THEN 'no number: this row can''t be matched, and importing the file again would add it again' END);
+      CONTINUE;
+    END IF;
+
+    -- merged_into followed one hop, as contact_for_number does. If the
+    -- contact reached is itself merged away, the chain doesn't resolve:
+    -- hold, never fill a contact that is no longer anybody (review of #64).
+    IF EXISTS (SELECT 1 FROM contacts c WHERE c.id = ANY (r.matches) AND c.merged_into IS NOT NULL) THEN
+      RETURN NEXT jsonb_build_object('row', r.row_no, 'verdict', 'held', 'hold', 'merge_chain', 'numbers', to_jsonb(r.nums),
+        'reason', 'this row''s number belongs to a contact merged into one that was itself merged: someone needs to look');
       CONTINUE;
     END IF;
 
     SELECT jsonb_agg(jsonb_build_object('id', c.id, 'name', COALESCE(c.full_name, c.business_name, 'unnamed contact'),
                                         'blocked', c.blocked) ORDER BY c.full_name, c.id)
-      INTO v_cands FROM contacts c WHERE c.id = ANY (v_matches);
+      INTO v_cands FROM contacts c WHERE c.id = ANY (r.matches);
 
-    IF cardinality(v_matches) > 1 THEN
+    IF cardinality(r.matches) > 1 THEN
       RETURN NEXT jsonb_build_object('row', r.row_no, 'verdict', 'held', 'hold', 'two_contacts',
-        'numbers', to_jsonb(v_nums), 'candidates', v_cands,
+        'numbers', to_jsonb(r.nums), 'candidates', v_cands,
         'reason', 'this row''s numbers belong to two contacts');
       CONTINUE;
     END IF;
 
-    SELECT * INTO v_c FROM contacts WHERE id = v_matches[1];
+    SELECT * INTO v_c FROM contacts WHERE id = r.matches[1];
     IF v_c.blocked THEN
       RETURN NEXT jsonb_build_object('row', r.row_no, 'verdict', 'held', 'hold', 'blocked',
-        'numbers', to_jsonb(v_nums), 'candidates', v_cands,
+        'numbers', to_jsonb(r.nums), 'candidates', v_cands,
         'reason', 'this row''s number belongs to a blocked contact');
       CONTINUE;
     END IF;
@@ -309,13 +354,13 @@ BEGIN
     ELSIF v_biz IS NOT NULL AND v_c.business_name <> v_biz THEN v_diff := v_diff || jsonb_build_object('business_name', jsonb_build_object('have', v_c.business_name, 'file', v_biz)); END IF;
     IF v_email IS NOT NULL AND v_c.email IS NULL THEN v_fills := v_fills || jsonb_build_object('email', v_email);
     ELSIF v_email IS NOT NULL AND v_c.email <> v_email THEN v_diff := v_diff || jsonb_build_object('email', jsonb_build_object('have', v_c.email, 'file', v_email)); END IF;
-    SELECT COALESCE(array_agg(x), '{}') INTO v_new FROM unnest(v_nums) x
+    SELECT COALESCE(array_agg(x), '{}') INTO v_new FROM unnest(r.nums) x
      WHERE NOT EXISTS (SELECT 1 FROM contact_phones cp WHERE cp.organization_id = p_org AND cp.e164 = x);
 
     RETURN NEXT jsonb_build_object('row', r.row_no,
       'verdict', CASE WHEN v_fills = '{}' AND cardinality(v_new) = 0 THEN 'unchanged' ELSE 'fill' END,
       'contact_id', v_c.id, 'contact_name', COALESCE(v_c.full_name, v_c.business_name, 'unnamed contact'),
-      'numbers', to_jsonb(v_nums), 'fills', v_fills, 'new_numbers', to_jsonb(v_new), 'differences', v_diff);
+      'numbers', to_jsonb(r.nums), 'fills', v_fills, 'new_numbers', to_jsonb(v_new), 'differences', v_diff);
   END LOOP;
 END $$;
 COMMENT ON FUNCTION contact_import_classify(uuid, jsonb) IS
@@ -376,6 +421,9 @@ DECLARE
   v_fields jsonb; v_added text[]; v_num text; v_label phone_label; i int; v_call uuid;
   k_created int := 0; k_filled int := 0; k_unchanged int := 0; k_resolved int := 0;
   k_skipped int := 0; k_refused int := 0; k_calls int := 0;
+  -- Parallel arrays, appended in place (a jsonb || per row would copy the
+  -- whole value each time, which is N squared again).
+  v_pair_cid uuid[] := '{}'; v_pair_num text[] := '{}';
 BEGIN
   IF v_user IS NULL THEN
     RAISE EXCEPTION 'your sign-in isn''t linked to a Hub user, so the import can''t say who did it';
@@ -463,28 +511,41 @@ BEGIN
       END IF;
     END IF;
 
-    -- Past calls from the row's numbers that now belong to the target: only
-    -- calls with no contact at all, never one a person unlinked by hand.
-    FOR v_call IN
-      UPDATE interactions i SET contact_id = v_target, contact_link_method = 'imported', updated_at = now()
-       WHERE i.organization_id = v_org AND i.contact_id IS NULL
-         AND (CASE WHEN i.direction = 'inbound' THEN i.from_e164 ELSE i.to_e164 END)
-             IN (SELECT cp.e164 FROM contact_phones cp
-                  WHERE cp.contact_id = v_target
-                    AND cp.e164 IN (SELECT jsonb_array_elements_text(x -> 'numbers')))
-         AND NOT EXISTS (SELECT 1 FROM change_history h
-                          WHERE h.entity = 'interaction' AND h.entity_id = i.id
-                            AND h.action = 'unlinked' AND h.detail ->> 'field' = 'contact_id')
-      RETURNING i.id
-    LOOP
-      PERFORM record_change(v_org, 'interaction', v_call, 'linked', 'user', v_actor,
-        format('Linked to a contact by %s''s import of %s', v_actor, COALESCE(p_filename, 'a contact list')),
-        v_user, jsonb_build_object('field', 'contact_id', 'contact_id', v_target,
-                                   'previous_contact_id', NULL, 'previous_state', 'unlinked',
-                                   'import_id', v_import),
-        'imported');
-      k_calls := k_calls + 1;
+    -- Remember which of this row's numbers now belong to the target; past
+    -- calls are linked once, after the loop (review of #64: one UPDATE, not
+    -- one per row).
+    FOR v_num IN SELECT jsonb_array_elements_text(x -> 'numbers') LOOP
+      v_pair_cid := v_pair_cid || v_target;
+      v_pair_num := v_pair_num || v_num;
     END LOOP;
+  END LOOP;
+
+  -- Past calls from the imported numbers, linked in one statement: only calls
+  -- with no contact at all, never one a person unlinked by hand, and only
+  -- numbers that ended up on the contact (a number left with another contact
+  -- by a picked row isn't linked to the picked one).
+  FOR v_call, v_target IN
+    WITH pairs AS (
+      SELECT DISTINCT cid, e164 FROM unnest(v_pair_cid, v_pair_num) AS t(cid, e164)),
+    owned AS (
+      SELECT p.cid, p.e164 FROM pairs p
+        JOIN contact_phones cp ON cp.organization_id = v_org AND cp.contact_id = p.cid AND cp.e164 = p.e164)
+    UPDATE interactions i SET contact_id = o.cid, contact_link_method = 'imported', updated_at = now()
+      FROM owned o
+     WHERE i.organization_id = v_org AND i.contact_id IS NULL
+       AND (CASE WHEN i.direction = 'inbound' THEN i.from_e164 ELSE i.to_e164 END) = o.e164
+       AND NOT EXISTS (SELECT 1 FROM change_history h
+                        WHERE h.entity = 'interaction' AND h.entity_id = i.id
+                          AND h.action = 'unlinked' AND h.detail ->> 'field' = 'contact_id')
+    RETURNING i.id, o.cid
+  LOOP
+    PERFORM record_change(v_org, 'interaction', v_call, 'linked', 'user', v_actor,
+      format('Linked to a contact by %s''s import of %s', v_actor, COALESCE(p_filename, 'a contact list')),
+      v_user, jsonb_build_object('field', 'contact_id', 'contact_id', v_target,
+                                 'previous_contact_id', NULL, 'previous_state', 'unlinked',
+                                 'import_id', v_import),
+      'imported');
+    k_calls := k_calls + 1;
   END LOOP;
 
   PERFORM set_config('hub.contact_import', '1', true);
