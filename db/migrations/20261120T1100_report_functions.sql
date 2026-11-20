@@ -55,6 +55,21 @@
 -- the page must say "no other manager was told", not "nobody was told" —
 -- for early clients that is the normal case, not the edge.
 --
+-- FOR THE PAGE, from review — things the numbers here do not say for it:
+--   * value_total is NULL when no counted case has a value. Show "—", never
+--     £0: no value recorded is not zero revenue;
+--   * changed_after_close is CASES and changes_after_close is CHANGES. Say
+--     both ("2 cases, 3 changes"); they are different numbers;
+--   * pipeline_now's awaiting_confirmation excludes on-hold cases (they have
+--     their own line); the bell's prompt does not. Do not label them with the
+--     same words, or they will disagree about an on-hold case in plain view.
+--
+-- REVIEWED 20 Nov (planning session) on commit 06a3238. Changed in answer:
+-- the "changed after it closed" window is now decided once, in
+-- revenue_moves(), and revenue_by_month counts that list (cases AND changes)
+-- instead of restating the window; the precondition checks that
+-- can_manage_settings() exists; the notes for the page above.
+--
 -- NOT SAFE TO RUN TWICE: the precondition refuses if revenue_by_month exists.
 --
 -- Requires: 20261119T1510 (case_revenue_date_for, case_awaiting_confirmation_
@@ -72,6 +87,11 @@ BEGIN
   IF to_regprocedure('revenue_by_month(uuid,date,date,text)') IS NOT NULL THEN
     RAISE EXCEPTION 'revenue_by_month already exists — 20261120T1100 has run here'
       USING HINT = 'This file is not safe to run twice. Nothing has been changed.';
+  END IF;
+  -- The manager check this relies on (038). Listed as required; checked, not
+  -- assumed (review, 20 Nov).
+  IF to_regprocedure('can_manage_settings()') IS NULL THEN
+    RAISE EXCEPTION 'can_manage_settings() does not exist; run 038 first';
   END IF;
   -- The history rows this reads must be written: 20261120T1000 first.
   IF position('managers_notified' IN COALESCE((SELECT prosrc FROM pg_proc
@@ -99,99 +119,8 @@ COMMENT ON FUNCTION report_reader_check() IS
   'is what decides which FIRM''s rows it reads.';
 
 -- -----------------------------------------------------------------------------
--- 2. Revenue by month
--- -----------------------------------------------------------------------------
-CREATE FUNCTION revenue_by_month(p_org uuid, p_from date, p_to date, p_tz text DEFAULT 'UTC')
-RETURNS TABLE (
-  month               date,     -- the first of the month
-  closed              boolean,  -- the month has ended, in p_tz
-  counted             integer,  -- cases whose revenue date falls in it
-  confirmed           integer,  -- … of which the served date is confirmed
-  unconfirmed         integer,  -- … of which it is a passed booked date
-  value_total         numeric,  -- sale_value summed over those that have one
-  with_value          integer,  -- how many of `counted` have a sale_value
-  marked_lost         integer,  -- ACTIVITY: cases marked lost during the month
-                                -- (through set_case_status/set_case_lost,
-                                -- which write the status history row; a
-                                -- direct UPDATE writes none and is not seen)
-  changed_after_close integer   -- cases whose revenue left or entered this
-                                -- month by a change made after it ended
-)
-LANGUAGE plpgsql STABLE AS $$
-BEGIN
-  PERFORM report_reader_check();
-  IF p_from IS NULL OR p_to IS NULL OR p_from > p_to THEN
-    RAISE EXCEPTION 'choose a range of months, earliest first';
-  END IF;
-  IF p_to > p_from + interval '36 months' THEN
-    RAISE EXCEPTION 'a report covers at most three years at a time';
-  END IF;
-
-  -- p_org is a FILTER. Row-level security scopes every read below to what
-  -- the caller may see; never make this SECURITY DEFINER.
-  RETURN QUERY
-  WITH m AS (
-    SELECT d::date AS month,
-           (d + interval '1 month')::date AS next_month,
-           ((d + interval '1 month')::timestamp AT TIME ZONE p_tz) AS ends_at,
-           (d::timestamp AT TIME ZONE p_tz) AS starts_at
-      FROM generate_series(date_trunc('month', p_from), date_trunc('month', p_to), interval '1 month') d
-  ),
-  c AS (
-    SELECT case_revenue_date_for(status, served_on, booked_service_date) AS rd,
-           served_on, sale_value
-      FROM cases
-     WHERE organization_id = p_org
-  ),
-  lost AS (
-    SELECT h.entity_id, h.occurred_at
-      FROM change_history h
-     WHERE h.organization_id = p_org
-       AND h.entity = 'case'
-       AND h.detail->>'field' = 'status'
-       AND h.detail->>'to' = 'lost'
-       AND h.detail->>'from' IS DISTINCT FROM 'lost'
-  ),
-  moves AS (
-    SELECT h.entity_id, h.occurred_at,
-           (h.detail->>'from')::date AS from_date,
-           (h.detail->>'to')::date   AS to_date
-      FROM change_history h
-     WHERE h.organization_id = p_org
-       AND h.entity = 'case'
-       AND h.detail->>'field' = 'revenue_date'
-  )
-  SELECT m.month,
-         m.ends_at <= now(),
-         (SELECT count(*)::int FROM c WHERE c.rd >= m.month AND c.rd < m.next_month),
-         (SELECT count(*)::int FROM c WHERE c.rd >= m.month AND c.rd < m.next_month AND c.served_on IS NOT NULL),
-         (SELECT count(*)::int FROM c WHERE c.rd >= m.month AND c.rd < m.next_month AND c.served_on IS NULL),
-         (SELECT sum(c.sale_value) FROM c WHERE c.rd >= m.month AND c.rd < m.next_month),
-         (SELECT count(*)::int FROM c WHERE c.rd >= m.month AND c.rd < m.next_month AND c.sale_value IS NOT NULL),
-         -- Distinct CASES: one lost, reinstated and lost again in a month is
-         -- one case marked lost, which is what the page says.
-         (SELECT count(DISTINCT lost.entity_id)::int FROM lost WHERE lost.occurred_at >= m.starts_at AND lost.occurred_at < m.ends_at),
-         (SELECT count(DISTINCT mv.entity_id)::int FROM moves mv
-           WHERE mv.occurred_at >= m.ends_at
-             AND ((mv.from_date >= m.month AND mv.from_date < m.next_month)
-               OR (mv.to_date   >= m.month AND mv.to_date   < m.next_month)))
-    FROM m
-   ORDER BY m.month;
-END $$;
-
-COMMENT ON FUNCTION revenue_by_month(uuid, date, date, text) IS
-  'One row per month from p_from to p_to: cases counted as revenue that month '
-  '(case_revenue_date_for — confirmed and booked-not-yet-confirmed apart), '
-  'their recorded value and how many have one, cases MARKED LOST during the '
-  'month (an activity count, never revenue), and how many cases'' revenue '
-  'entered or left the month by a change made after it closed (from the '
-  'revenue_date history rows, 20261120T1000). Managers only. INVOKER: '
-  'ROW-LEVEL SECURITY SCOPES IT AND p_org IS ONLY A FILTER — never make it '
-  'SECURITY DEFINER. Timestamps are read in p_tz, the firm''s usual zone, '
-  'passed by the app.';
-
--- -----------------------------------------------------------------------------
--- 3. Why a closed month changed
+-- 2. Why a closed month changed — defined first, because revenue_by_month's
+--    count is the length of this list
 -- -----------------------------------------------------------------------------
 CREATE FUNCTION revenue_moves(p_org uuid, p_month date, p_tz text DEFAULT 'UTC')
 RETURNS TABLE (
@@ -233,6 +162,95 @@ COMMENT ON FUNCTION revenue_moves(uuid, date, text) IS
   'EXCLUDES the person who made the change, so 0 means "no other manager was '
   'told". Managers only. INVOKER: row-level security scopes it; p_org is '
   'only a filter.';
+
+-- -----------------------------------------------------------------------------
+-- 3. Revenue by month
+-- -----------------------------------------------------------------------------
+CREATE FUNCTION revenue_by_month(p_org uuid, p_from date, p_to date, p_tz text DEFAULT 'UTC')
+RETURNS TABLE (
+  month               date,     -- the first of the month
+  closed              boolean,  -- the month has ended, in p_tz
+  counted             integer,  -- cases whose revenue date falls in it
+  confirmed           integer,  -- … of which the served date is confirmed
+  unconfirmed         integer,  -- … of which it is a passed booked date
+  value_total         numeric,  -- sale_value summed over those that have one
+  with_value          integer,  -- how many of `counted` have a sale_value
+  marked_lost         integer,  -- ACTIVITY: cases marked lost during the month
+                                -- (through set_case_status/set_case_lost,
+                                -- which write the status history row; a
+                                -- direct UPDATE writes none and is not seen)
+  changed_after_close integer,  -- CASES whose revenue left or entered this
+                                -- month by a change made after it ended …
+  changes_after_close integer   -- … and how many CHANGES that was. Two
+                                -- numbers, so the page can say "2 cases,
+                                -- 3 changes" rather than imply they are one
+)
+LANGUAGE plpgsql STABLE AS $$
+BEGIN
+  PERFORM report_reader_check();
+  IF p_from IS NULL OR p_to IS NULL OR p_from > p_to THEN
+    RAISE EXCEPTION 'choose a range of months, earliest first';
+  END IF;
+  IF p_to > p_from + interval '36 months' THEN
+    RAISE EXCEPTION 'a report covers at most three years at a time';
+  END IF;
+
+  -- p_org is a FILTER. Row-level security scopes every read below to what
+  -- the caller may see; never make this SECURITY DEFINER.
+  RETURN QUERY
+  WITH m AS (
+    SELECT d::date AS month,
+           (d + interval '1 month')::date AS next_month,
+           ((d + interval '1 month')::timestamp AT TIME ZONE p_tz) AS ends_at,
+           (d::timestamp AT TIME ZONE p_tz) AS starts_at
+      FROM generate_series(date_trunc('month', p_from), date_trunc('month', p_to), interval '1 month') d
+  ),
+  c AS (
+    SELECT case_revenue_date_for(status, served_on, booked_service_date) AS rd,
+           served_on, sale_value
+      FROM cases
+     WHERE organization_id = p_org
+  ),
+  lost AS (
+    SELECT h.entity_id, h.occurred_at
+      FROM change_history h
+     WHERE h.organization_id = p_org
+       AND h.entity = 'case'
+       AND h.detail->>'field' = 'status'
+       AND h.detail->>'to' = 'lost'
+       AND h.detail->>'from' IS DISTINCT FROM 'lost'
+  )
+  SELECT m.month,
+         m.ends_at <= now(),
+         (SELECT count(*)::int FROM c WHERE c.rd >= m.month AND c.rd < m.next_month),
+         (SELECT count(*)::int FROM c WHERE c.rd >= m.month AND c.rd < m.next_month AND c.served_on IS NOT NULL),
+         (SELECT count(*)::int FROM c WHERE c.rd >= m.month AND c.rd < m.next_month AND c.served_on IS NULL),
+         (SELECT sum(c.sale_value) FROM c WHERE c.rd >= m.month AND c.rd < m.next_month),
+         (SELECT count(*)::int FROM c WHERE c.rd >= m.month AND c.rd < m.next_month AND c.sale_value IS NOT NULL),
+         -- Distinct CASES: one lost, reinstated and lost again in a month is
+         -- one case marked lost, which is what the page says.
+         (SELECT count(DISTINCT lost.entity_id)::int FROM lost WHERE lost.occurred_at >= m.starts_at AND lost.occurred_at < m.ends_at),
+         -- The count IS the length of the list (review, 20 Nov): which
+         -- moves count as "after it closed" is decided once, in
+         -- revenue_moves(), so the number and the list beneath it cannot
+         -- come to disagree.
+         (SELECT count(DISTINCT rm.case_id)::int FROM revenue_moves(p_org, m.month, p_tz) rm),
+         (SELECT count(*)::int FROM revenue_moves(p_org, m.month, p_tz) rm)
+    FROM m
+   ORDER BY m.month;
+END $$;
+
+COMMENT ON FUNCTION revenue_by_month(uuid, date, date, text) IS
+  'One row per month from p_from to p_to: cases counted as revenue that month '
+  '(case_revenue_date_for — confirmed and booked-not-yet-confirmed apart), '
+  'their recorded value and how many have one, cases MARKED LOST during the '
+  'month (an activity count, never revenue), and how many cases'' revenue '
+  'entered or left the month by a change made after it closed, and how many '
+  'changes — both COUNTED FROM revenue_moves(), so the number and the list '
+  'are one statement and cannot disagree. Managers only. INVOKER: '
+  'ROW-LEVEL SECURITY SCOPES IT AND p_org IS ONLY A FILTER — never make it '
+  'SECURITY DEFINER. Timestamps are read in p_tz, the firm''s usual zone, '
+  'passed by the app.';
 
 -- -----------------------------------------------------------------------------
 -- 4. The pipeline, as of today
@@ -292,7 +310,7 @@ BEGIN
     FROM (VALUES
     ('pipeline_now(uuid)', 'ad89f1435a353e2d291db779269b36f7'),
     ('report_reader_check()', 'fa01dc5a9693dba9a291acad0ec6400d'),
-    ('revenue_by_month(uuid,date,date,text)', '3977f30b2271022b2de32583481548c5'),
+    ('revenue_by_month(uuid,date,date,text)', 'bab6ea96641eec98814d346f5504e4fe'),
     ('revenue_moves(uuid,date,text)', '6e71cd4ef364431ff5d4d22484bad69f')
          ) AS e(sig, want)
     LEFT JOIN pg_proc p ON p.oid = to_regprocedure(e.sig)
@@ -327,8 +345,13 @@ COMMIT;
 -- counted case and its own manager. Line 6 is the positive half of the RLS
 -- check — the case is there for its own firm, so the other firm's 0 is RLS.
 --
+-- A case lost and then reinstated after the closed month (k8) is one case
+-- and two changes, so line 2 can tell the two numbers apart, and checks that
+-- the count is the length of revenue_moves' list.
+--
 -- RUN ON A SCRATCH REBUILD, 20 Nov — every migration on main, with
--- 20261120T1000 and this file: every line matched. NOT YET RUN ON STAGING.
+-- 20261120T1000 and this file, after the review's change: every line
+-- matched. NOT YET RUN ON STAGING.
 --
 -- DO $$
 -- DECLARE
@@ -337,7 +360,7 @@ COMMIT;
 --   mc date := date_trunc('month', current_date)::date;                           -- this month
 --   v_org uuid; v_org2 uuid; v_mgr uuid; v_dir uuid; v_x uuid;
 --   a_mgr uuid := gen_random_uuid(); a_dir uuid := gen_random_uuid(); a_x uuid := gen_random_uuid();
---   k_lost uuid; n int; x record;
+--   k_lost uuid; k_back uuid; n int; x record;
 -- BEGIN
 --   PERFORM set_config('app.is_internal', 'on', true);
 --   -- Two firms of the fixture's own, so no real case can move these numbers.
@@ -369,6 +392,8 @@ COMMIT;
 --   VALUES (v_org, 'at_need', t + 20, case_status_default(v_org, 'active'));                -- k6 booked ahead
 --   INSERT INTO cases (organization_id, need_type, booked_service_date, status_item_id)
 --   VALUES (v_org, 'at_need', t, case_status_default(v_org, 'active'));                     -- k7 booked today: awaiting
+--   INSERT INTO cases (organization_id, need_type, served_on, status_item_id)
+--   VALUES (v_org, 'at_need', m0 + 5, case_status_default(v_org, 'active')) RETURNING id INTO k_back; -- k8 lost, then reinstated: 1 case, 2 changes
 --   -- The other firm: one case counted in m0, which the report firm must not see.
 --   INSERT INTO cases (organization_id, need_type, served_on, status_item_id)
 --   VALUES (v_org2, 'at_need', m0 + 4, case_status_default(v_org2, 'active'));
@@ -378,6 +403,8 @@ COMMIT;
 --   PERFORM set_config('request.jwt.claims', json_build_object('sub', a_dir::text)::text, true);
 --   PERFORM set_config('role', 'authenticated', true);
 --   PERFORM set_case_lost(k_lost, true, 'ZZZ family disputed');
+--   PERFORM set_case_lost(k_back, true, 'ZZZ disputed, then settled');
+--   PERFORM set_case_lost(k_back, false);
 --
 --   -- 1. A non-manager is refused, for that reason.
 --   BEGIN
@@ -393,16 +420,20 @@ COMMIT;
 --   SELECT * INTO x FROM revenue_by_month(v_org, m0, m0) LIMIT 1;
 --   r := r || '2. the closed month — closed ' || x.closed || ', counted ' || x.counted || ' (confirmed ' || x.confirmed
 --          || ', unconfirmed ' || x.unconfirmed || '), value ' || COALESCE(x.value_total::text, 'null') || ' across ' || x.with_value
---          || ', changed after close ' || x.changed_after_close
---          || '   (expect closed true, counted 2 (1, 1), value 1000.00 across 1, changed after close 1 — the lost k3 is NOT counted)' || chr(10);
+--          || ', changed after close ' || x.changed_after_close || ' cases, ' || x.changes_after_close || ' changes'
+--          || '   (expect closed true, counted 3 (2, 1) — k1, k2 and the reinstated k8; the lost k3 is NOT counted — value 1000.00 across 1, changed after close 2 cases, 3 changes — k3 once, k8 twice)' || chr(10);
+--   r := r || '   the count is the list: '
+--          || (x.changed_after_close = (SELECT count(DISTINCT case_id) FROM revenue_moves(v_org, m0))
+--              AND x.changes_after_close = (SELECT count(*) FROM revenue_moves(v_org, m0)))
+--          || '   (expect true)' || chr(10);
 --   SELECT * INTO x FROM revenue_by_month(v_org, mc, mc) LIMIT 1;
 --   r := r || '3. this month — closed ' || x.closed || ', counted ' || x.counted || ' (unconfirmed ' || x.unconfirmed
 --          || '), marked lost ' || x.marked_lost
---          || '   (expect closed false, counted 1 (1) — k7 booked today, marked lost 1 — k3, an activity, not revenue)' || chr(10);
+--          || '   (expect closed false, counted 1 (1) — k7 booked today, marked lost 2 — k3 and k8, distinct cases; an activity, not revenue)' || chr(10);
 --   SELECT count(*) INTO n FROM revenue_by_month(v_org, (mc - interval '12 months')::date, mc);
 --   r := r || '   13-month range returns ' || n || ' rows   (expect 13)' || chr(10);
 --
---   SELECT * INTO x FROM revenue_moves(v_org, m0) LIMIT 1;
+--   SELECT * INTO x FROM revenue_moves(v_org, m0) WHERE case_id = k_lost LIMIT 1;
 --   r := r || '4. why the closed month changed — from ' || COALESCE(x.from_date::text, 'null') || ' to ' || COALESCE(x.to_date::text, 'null')
 --          || ', reason ' || COALESCE(x.reason, 'null') || ', other managers told ' || COALESCE(x.managers_notified::text, 'null')
 --          || '   (expect from ' || (m0 + 2) || ' to null, reason ZZZ family disputed, told 1 — the manager; the director made it)' || chr(10);
