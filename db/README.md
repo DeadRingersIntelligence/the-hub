@@ -335,8 +335,11 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261120T1800`**, run on both databases on 20 November and
-identical on both afterwards: `com` (+468) and `mig` (+484) moved for two
+**Last moved by `20261120T1900`**, run on both databases on 20 November and
+identical on both afterwards: `con` (+73) and `com` (+73) moved for one
+constraint and its comment, to the character, as predicted. Nothing else
+moved. **Before that, by `20261120T1800`**, run on both databases on 20
+November and identical on both afterwards: `com` (+468) and `mig` (+484) moved for two
 tables' policies, split per command, and their comments, to the character,
 as predicted. Nothing else moved. **Before that, by `20261120T1700`**, run on
 both databases on 20 November and identical on both afterwards: `com` (+1137, twenty policy comments and two
@@ -394,8 +397,8 @@ md5 and length.
 |---|---|---|
 | `acl` | `281e702301326b33242c9317641d6e13` | 45342 |
 | `col` | `02a3e69111b1c32f6813d652598e49c4` | 77025 |
-| `com` | `f9820f25aff742cfabdf896e9dd17c39` | 11153 |
-| `con` | `e8ab294ac7fe127796b26c187060aa2a` | 50479 |
+| `com` | `491d9d51cd483ebbb795e60c47a0dc60` | 11226 |
+| `con` | `01f38ed29714402a9509e4777af58e0e` | 50552 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
 | `fn` | `1d483c510e32f8dc625f04f9420f4290` | 13341 |
 | `mig` | `c1787e211d20529075bd1a1b189aedbd` | 17383 |
@@ -1095,6 +1098,19 @@ new feature with its own review, and it would loosen a consent rule. If it's
 ever built, `partners_read` moves to `in_force()` in the same file.
 `current_date` in a CHECK is safe here, because a date that was today or
 earlier stays earlier.
+
+**Revoking now means not sending a date.** `current_date` is UTC on Supabase.
+East of UTC, a firm's "today" can be UTC's tomorrow: at 10am on the 21st in New
+Zealand it's 21:00 on the 20th in UTC. So a date worked out in the firm's zone
+is refused as being in the future. The constraint stays as it is (allowing
+`current_date + 1` would bring back the divergence). Instead:
+- "Revoke now" goes through a Hub function that sets `revoked_on =
+  current_date` itself. `revoked_on` has no default, and PostgREST can't send
+  `current_date`. Build it with the grant/revoke screen.
+- A date the app supplies is only ever for a revocation that already
+  happened, so it's always in the past and always passes.
+
+The symptom, otherwise, would be a refusal with no apparent cause.
 
 **`client_type` sets the default only when a firm is set up**
 (`organizations_default_capabilities`, on insert). After that, the

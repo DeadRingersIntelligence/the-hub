@@ -2,6 +2,31 @@
 -- 20261120T1900_revocation_is_not_a_schedule.sql
 -- The Hub — partner_access.revoked_on can't be in the future.
 --
+-- APPLIED to staging (17:35 UTC) and production (17:36 UTC), 20 Nov 2026,
+-- from commit 4cc76a7, sha256 91dc09cf…87895cdc, loaded whole. ran_md5
+-- 14cf04cb560c3510bdbf90e0904ccb82 (8025 characters) on both, as predicted.
+-- All 7 verification lines matched on both. The baseline moved con to 50552
+-- and com to 11226, each to the character, and nothing else moved. This note
+-- was added afterwards.
+--
+-- CORRECTION, from review after the run. The "WHOSE TODAY" paragraph below
+-- covers only the half that works. West of UTC is fine. East of UTC is the
+-- opposite: at 10am on the 21st in New Zealand it's 21:00 on the 20th in UTC,
+-- so a date worked out in the firm's zone (as the app does for reports) is
+-- refused as being in the future. Its last sentence ("never refuses a
+-- revocation someone means to take effect now") isn't true as written. The
+-- paragraph is left as it ran; this note corrects it.
+--
+-- THE CONSTRAINT STAYS. Allowing current_date + 1 would put back the
+-- divergence this file closes. The rule belongs in the app: REVOKING NOW
+-- MEANS NOT SENDING A DATE. revoked_on has no default, and PostgREST can't
+-- send current_date, so "revoke now" needs a Hub function that sets
+-- revoked_on = current_date itself, to be built with the grant/revoke screen.
+-- A date the app supplies is then only ever a revocation that already
+-- happened, which is in the past and always passes. Theoretical while every
+-- client is in the US, but the symptom, a refusal with no apparent cause,
+-- would be hard to trace back here. Recorded in db/README.md.
+--
 -- WHAT IS WRONG. partner_access is a dated grant: granted_on NOT NULL, and
 -- revoked_on. in_force() (20261120T1510) is the one statement of when a dated
 -- grant applies, but partners_read reads revoked_on IS NULL. Those two
