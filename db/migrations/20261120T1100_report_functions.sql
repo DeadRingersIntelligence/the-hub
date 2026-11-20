@@ -70,6 +70,12 @@
 -- instead of restating the window; the precondition checks that
 -- can_manage_settings() exists; the notes for the page above.
 --
+-- APPLIED to staging (02:40 UTC) and production (02:41 UTC), 20 Nov 2026,
+-- from the file hashed da4d4a3d, commit 60f102f, loaded whole. ran_md5
+-- 6e55d852965cc8886fe3693597e74076 (27542 characters) on both, as predicted
+-- before the run. This note and the verification result at the foot were
+-- added afterwards.
+--
 -- NOT SAFE TO RUN TWICE: the precondition refuses if revenue_by_month exists.
 --
 -- Requires: 20261119T1510 (case_revenue_date_for, case_awaiting_confirmation_
@@ -351,7 +357,11 @@ COMMIT;
 --
 -- RUN ON A SCRATCH REBUILD, 20 Nov — every migration on main, with
 -- 20261120T1000 and this file, after the review's change: every line
--- matched. NOT YET RUN ON STAGING.
+-- matched.
+--
+-- RUN ON STAGING AND ON PRODUCTION, 20 Nov, after the migration: all ten
+-- lines matched on both, identical to each other and to the scratch
+-- rebuild's.
 --
 -- DO $$
 -- DECLARE
