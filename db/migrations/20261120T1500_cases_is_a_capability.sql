@@ -2,6 +2,22 @@
 -- 20261120T1500_cases_is_a_capability.sql
 -- The Hub — capability gains 'cases'.
 --
+-- APPLIED to staging (14:30 UTC) and production (14:31 UTC), 20 Nov 2026,
+-- from commit f344c86, sha256 b00a5c33…fcc578f, loaded whole. ran_md5
+-- 7d2432b650189981e843cd6ff3e826d0 (4369 characters) on both, as predicted.
+-- The verification passed on both: cases is appended last, there are 0 rows,
+-- and the comment and ledger row are present. The baseline moved typ to 6492
+-- (+6, ",cases") and com to 9076 (+32, a new "Y capability" key), and nothing
+-- else, as predicted. This note was added afterwards.
+--
+-- THE TYPE COMMENT'S LAST TWO CLAUSES are T1510's behaviour, uncited: the
+-- answering-service default, and "when off … nothing new is created or
+-- linked". Review after the run asked for them to cite 20261120T1510, the way
+-- the first half cites 1400. The COMMENT below is left as it ran, because an
+-- applied file is annotated, never amended. 20261120T1510 re-issues COMMENT ON
+-- TYPE capability with the citation, in the file that builds what it
+-- describes.
+--
 -- WHY. Planning, 20 November: cases become a per-firm capability. An
 -- answering service doesn't run cases in the Hub; its cases, if any, live in
 -- its own case-management system. So "does this firm have cases" has to be
