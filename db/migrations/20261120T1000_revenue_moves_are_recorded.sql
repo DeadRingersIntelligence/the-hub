@@ -56,6 +56,12 @@
 -- is marked as a conclusion read from the app's code; managers_notified's
 -- exclusion of the actor is stated for whoever writes the report.
 --
+-- APPLIED to staging (02:15 UTC) and production (02:17 UTC), 20 Nov 2026,
+-- from the file hashed 8ddb3506, commit 1a58c84, loaded whole. ran_md5
+-- 3d67adfba5e956cb0c665f92be013b8b (32975 characters) on both — the file's
+-- text exactly, final newline included, as predicted before the run. This
+-- note and the verification result at the foot were added afterwards.
+--
 -- NOT SAFE TO RUN TWICE: the precondition refuses if the body already writes
 -- the row.
 --
@@ -495,7 +501,11 @@ COMMIT;
 -- RUN ON A SCRATCH REBUILD, 20 Nov — every migration on main, in order, with
 -- this file, after the review's change: every line matched, and
 -- 20261119T1510's own verification block, re-run against the three
--- rewritten writers, matched in full. NOT YET RUN ON STAGING.
+-- rewritten writers, matched in full.
+--
+-- RUN ON STAGING AND ON PRODUCTION, 20 Nov, after the migration: all six
+-- lines matched on both, identical to each other and to the scratch
+-- rebuild's.
 --
 -- DO $$
 -- DECLARE
