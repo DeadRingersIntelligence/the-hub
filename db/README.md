@@ -335,7 +335,12 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261120T1400`**, run on both databases on 20 November and
+**Last moved by `20261120T1500`**, run on both databases on 20 November and
+identical on both afterwards: `typ` (+6, `,cases`) and `com` (+32, a new
+`Y capability` key: 4 separator + 12 key + 4 arrow + 12 hash) moved, as
+predicted, and nothing else moved. **`mig` reads policies and the ledger
+table, not ledger rows**, so a file without policies leaves it alone.
+**Before that, by `20261120T1400`**, run on both databases on 20 November and
 identical on both afterwards: `com` (+419, six new policy comments) and `mig`
 (+283, the ledger row and three policies replaced by six) moved, as predicted to
 the character, and nothing else moved. `acl` held, because the grants were kept
@@ -373,13 +378,13 @@ md5 and length.
 |---|---|---|
 | `acl` | `0fce06c3e3ebc9394cdc1778cc1a56d4` | 44848 |
 | `col` | `02a3e69111b1c32f6813d652598e49c4` | 77025 |
-| `com` | `e5386fef5dd8c0ae5c5e2684e6e693fd` | 9044 |
+| `com` | `2d6a0fc29ba3183d97190c1a337403b9` | 9076 |
 | `con` | `e8ab294ac7fe127796b26c187060aa2a` | 50479 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
 | `fn` | `17e4fd595632abe15e821c6cc631d898` | 12734 |
 | `mig` | `d52ddb026ebf4b8faef97c3453720cc4` | 16133 |
 | `trg` | `4f6f23e045b4e57357eda3c9c8332868` | 6700 |
-| `typ` | `53df0c832893897ebc8d4cddd4ac5c8d` | 6486 |
+| `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
 
 **A migration applied to both databases moves the baseline, and the migration
 that moved it updates this table in its own pull request.** Not later, and not
