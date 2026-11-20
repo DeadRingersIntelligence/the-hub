@@ -887,9 +887,18 @@ Dead Ringers.
   `shops`, `shop_interactions`, `outcomes`, `reports`, `report_definitions` and
   `reporting_periods`. It also covers the rubric tables: `rubrics`,
   `rubric_behaviors`, `focus_behaviors`, `rubric_sections` and
-  `rubric_templates`. That file checks every table 007–009 create
-  (`behaviors`, `behavior_answers`, `transcript_segments` and `shopper_forms`
-  too) and says which shape each one has. **The rubric, the focus behaviours
+  `rubric_templates`, plus `behaviors`, `behavior_answers` and
+  `shopper_forms`: Dead Ringers' catalogue and findings.
+  **`transcript_segments` is locked by the same file, for a different reason,
+  and its comment must say so.** A transcript is not a finding about the firm.
+  It is the system's record of the firm's own call, and nobody hand-writes
+  one, so the reason is evidence integrity, not ownership. It sits under the
+  retention terms `20261120T1400` locked: a firm that can't shorten retention
+  but can edit transcripts has the same hole through a different door.
+  **Open: may a firm ever redact a transcript** (a caller's card number read
+  aloud, say)? If so, it needs a deliberate function that records what was
+  removed and by whom, never a general write permission. This needs
+  settling; it must not be answered by silence. **The rubric, the focus behaviours
   and the scoring are Dead Ringers' and proprietary (Mandie, 20 November). No
   product exception.**
 - **A client's own measure is never a rubric row.** If clients could add
