@@ -1,5 +1,5 @@
 -- =============================================================================
--- 20261121T1000_contact_import.sql
+-- 20261120T2330_contact_import.sql
 -- The Hub — a firm brings its contact list in, and sees what will happen
 -- before anything is written.
 --
@@ -19,7 +19,9 @@
 --     one contact                    fill it: empty fields only, never
 --                                    overwrite; differences shown, kept
 --     a blocked contact              hold (*)
---     a merged-away contact          follow merged_into to the survivor (*)
+--     a merged-away contact          follow merged_into to the survivor (*);
+--                                    if that is itself merged, hold: the
+--                                    chain doesn't resolve (review of #64)
 --     two or more contacts           hold: "this row's numbers belong to two
 --                                    contacts". A row that touches two
 --                                    contacts is never partly applied
@@ -62,6 +64,36 @@
 --   Importing the book changes shared data for the whole firm, in bulk, and
 --   is hard to reverse. Both functions act on current_organization_id(); for
 --   Dead Ringers staff that's their own current firm, not one a screen shows.
+--
+-- 5,000 ROWS IS A PROMISE TO A FIRM, SO IT WAS MEASURED (review of #64).
+-- Scratch, Postgres 16, as authenticated: 5,000 rows with names, one or two
+-- numbers each and 50 genuine in-file duplicates, against 150 contacts
+-- already in the book and 300 past calls. The whole sequence ran in ONE
+-- session with no ANALYZE between calls, the worst case:
+--
+--                                     first version    this file
+--   preview                               71 s           0.23 s
+--   commit (4,750 created, 293 calls)     91 s           3.6 s
+--   preview again (book now ~5,000)    5 min 56 s        0.66 s
+--   commit again (changes nothing)     5 min 57 s        1.7 s
+--
+-- Three causes, each fixed where it was:
+--   * the in-file check re-read the whole file for every row (N squared):
+--     the classifier now expands the file ONCE into (row, number) pairs,
+--     normalising each number once, and finds duplicates with a window;
+--   * the planner misjudges anything built from jsonb_array_elements and
+--     chose nested loops, calling firm_only_number about 44 million times:
+--     the per-phone work is one scan of point lookups, and only per-row
+--     aggregates are joined, by row number;
+--   * a plan cached against a small book was reused against a large one, and
+--     per-row lookups then scanned contacts sequentially, calling the RLS
+--     policy's functions on every row: the classifier's query is planned
+--     fresh on every call (EXECUTE), and NOTHING in its loop queries a table.
+--     Everything the loop needs comes back from that one query.
+-- The commit links past calls in one UPDATE at the end, not one per row.
+-- Line 27 of the verification runs a 5,000-row file and prints both timings beside
+-- the authenticated role's statement_timeout, so the cap is tested, not
+-- asserted.
 --
 -- THERE IS NO UNDO. Ruled: import_id plus history is the reversal path,
 -- and the history is written to be enough for that by hand:
@@ -160,7 +192,7 @@ COMMENT ON FUNCTION contact_phones_not_firm_only() IS
   'create_contact applied, now on the table, so no path skips it. New numbers '
   'and changed numbers only; a number that became staff later (046) stays, '
   'dormant. Fires after contact_phones_normalize_t by NAME ORDER: keep the name '
-  'sorting after it (20261121T1000).';
+  'sorting after it (20261120T2330).';
 CREATE TRIGGER contact_phones_not_firm_only_t
   BEFORE INSERT OR UPDATE OF e164 ON contact_phones
   FOR EACH ROW EXECUTE FUNCTION contact_phones_not_firm_only();
@@ -189,7 +221,7 @@ COMMENT ON TABLE contact_imports IS
   'One row per committed contact import: who, when, the file, and what it did. '
   'Written by commit_contact_import alone, at the end of the import; updated or '
   'deleted by nobody. With change_history (which carries this id), it is the '
-  'reversal path: there is no undo (20261121T1000).';
+  'reversal path: there is no undo (20261120T2330).';
 
 ALTER TABLE contact_imports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE contact_imports FORCE ROW LEVEL SECURITY;
@@ -207,17 +239,17 @@ CREATE POLICY contact_imports_insert ON contact_imports FOR INSERT TO authentica
               AND imported_by = current_user_id()
               AND COALESCE(current_setting('hub.contact_import', true), '') = '1');
 COMMENT ON POLICY contact_imports_read ON contact_imports IS
-  'A firm''s owners and managers see its imports (20261121T1000).';
+  'A firm''s owners and managers see its imports (20261120T2330).';
 COMMENT ON POLICY contact_imports_insert ON contact_imports IS
   'Written only by commit_contact_import (the hub.contact_import seatbelt). No '
   'UPDATE or DELETE grant or policy: an import''s record is kept as written '
-  '(20261121T1000).';
+  '(20261120T2330).';
 
 ALTER TABLE contacts ADD COLUMN import_id uuid
   REFERENCES contact_imports(id) DEFERRABLE INITIALLY DEFERRED;
 COMMENT ON COLUMN contacts.import_id IS
   'The import that created this contact; null for every other path. A pointer, '
-  'not the record: change_history is the record (20261121T1000).';
+  'not the record: change_history is the record (20261120T2330).';
 
 -- -----------------------------------------------------------------------------
 -- 4. The classifier: the one statement of how an import row is treated
@@ -232,7 +264,7 @@ RETURNS SETOF jsonb LANGUAGE plpgsql STABLE AS $$
 -- timings in the header.
 DECLARE
   r record; v_full text; v_biz text; v_email text;
-  v_c record; v_fills jsonb; v_diff jsonb; v_new text[]; v_cands jsonb;
+  v_c jsonb; v_fills jsonb; v_diff jsonb; v_new text[]; v_cands jsonb;
 BEGIN
   -- PLANNED FRESH ON EVERY CALL (EXECUTE, not a cached plan). Measured: with
   -- the plan cached, a preview after a 5,000-row commit in the same session
@@ -276,13 +308,24 @@ BEGIN
        WHERE o <> w.row_no GROUP BY w.row_no),
     row_match AS (
       SELECT w.row_no, array_agg(DISTINCT c) AS cids
-        FROM w CROSS JOIN LATERAL unnest(w.cids) c GROUP BY w.row_no)
+        FROM w CROSS JOIN LATERAL unnest(w.cids) c GROUP BY w.row_no),
+    row_cands AS (
+      SELECT m.row_no,
+             jsonb_agg(jsonb_build_object('id', c.id, 'name', COALESCE(c.full_name, c.business_name, 'unnamed contact'),
+                                          'blocked', c.blocked, 'merged', c.merged_into IS NOT NULL,
+                                          'full_name', c.full_name, 'business_name', c.business_name, 'email', c.email)
+                       ORDER BY c.full_name, c.id) AS cands
+        FROM row_match m CROSS JOIN LATERAL unnest(m.cids) cid JOIN contacts c ON c.id = cid
+       GROUP BY m.row_no),
+    row_new AS (
+      SELECT row_no, array_agg(DISTINCT e164) AS new_nums FROM w WHERE ok AND cids IS NULL GROUP BY row_no)
     SELECT x.row_no, x.val, COALESCE(n.nums, '{}') AS nums, bd.raw AS bad, st.lbl AS staff,
-           d.dups, m.cids AS matches
+           d.dups, m.cids AS matches, cd.cands, COALESCE(nw.new_nums, '{}') AS new_nums
       FROM rws x
       LEFT JOIN row_nums n USING (row_no) LEFT JOIN row_bad bd USING (row_no)
       LEFT JOIN row_staff st USING (row_no) LEFT JOIN row_dups d USING (row_no)
-      LEFT JOIN row_match m USING (row_no)
+      LEFT JOIN row_match m USING (row_no) LEFT JOIN row_cands cd USING (row_no)
+      LEFT JOIN row_new nw USING (row_no)
      ORDER BY x.row_no
   $q$ USING p_org, p_rows
   LOOP
@@ -322,15 +365,18 @@ BEGIN
     -- merged_into followed one hop, as contact_for_number does. If the
     -- contact reached is itself merged away, the chain doesn't resolve:
     -- hold, never fill a contact that is no longer anybody (review of #64).
-    IF EXISTS (SELECT 1 FROM contacts c WHERE c.id = ANY (r.matches) AND c.merged_into IS NOT NULL) THEN
+    -- merged_into_points_at_a_survivor (20261102T2200) refuses a chain from
+    -- both ends, so this can't arise while that guard stands. It costs
+    -- nothing, and it's the right answer if the guard is ever dropped.
+    IF EXISTS (SELECT 1 FROM jsonb_array_elements(r.cands) cd WHERE (cd ->> 'merged')::boolean) THEN
       RETURN NEXT jsonb_build_object('row', r.row_no, 'verdict', 'held', 'hold', 'merge_chain', 'numbers', to_jsonb(r.nums),
         'reason', 'this row''s number belongs to a contact merged into one that was itself merged: someone needs to look');
       CONTINUE;
     END IF;
 
-    SELECT jsonb_agg(jsonb_build_object('id', c.id, 'name', COALESCE(c.full_name, c.business_name, 'unnamed contact'),
-                                        'blocked', c.blocked) ORDER BY c.full_name, c.id)
-      INTO v_cands FROM contacts c WHERE c.id = ANY (r.matches);
+    -- Candidates as a person sees them: id, name, blocked.
+    SELECT jsonb_agg(jsonb_build_object('id', cd -> 'id', 'name', cd -> 'name', 'blocked', cd -> 'blocked'))
+      INTO v_cands FROM jsonb_array_elements(r.cands) cd;
 
     IF cardinality(r.matches) > 1 THEN
       RETURN NEXT jsonb_build_object('row', r.row_no, 'verdict', 'held', 'hold', 'two_contacts',
@@ -339,8 +385,8 @@ BEGIN
       CONTINUE;
     END IF;
 
-    SELECT * INTO v_c FROM contacts WHERE id = r.matches[1];
-    IF v_c.blocked THEN
+    v_c := r.cands -> 0;   -- the one contact, read in the main query
+    IF (v_c ->> 'blocked')::boolean THEN
       RETURN NEXT jsonb_build_object('row', r.row_no, 'verdict', 'held', 'hold', 'blocked',
         'numbers', to_jsonb(r.nums), 'candidates', v_cands,
         'reason', 'this row''s number belongs to a blocked contact');
@@ -348,18 +394,17 @@ BEGIN
     END IF;
 
     v_fills := '{}'; v_diff := '{}';
-    IF v_full IS NOT NULL AND v_c.full_name IS NULL THEN v_fills := v_fills || jsonb_build_object('full_name', v_full);
-    ELSIF v_full IS NOT NULL AND v_c.full_name <> v_full THEN v_diff := v_diff || jsonb_build_object('full_name', jsonb_build_object('have', v_c.full_name, 'file', v_full)); END IF;
-    IF v_biz IS NOT NULL AND v_c.business_name IS NULL THEN v_fills := v_fills || jsonb_build_object('business_name', v_biz);
-    ELSIF v_biz IS NOT NULL AND v_c.business_name <> v_biz THEN v_diff := v_diff || jsonb_build_object('business_name', jsonb_build_object('have', v_c.business_name, 'file', v_biz)); END IF;
-    IF v_email IS NOT NULL AND v_c.email IS NULL THEN v_fills := v_fills || jsonb_build_object('email', v_email);
-    ELSIF v_email IS NOT NULL AND v_c.email <> v_email THEN v_diff := v_diff || jsonb_build_object('email', jsonb_build_object('have', v_c.email, 'file', v_email)); END IF;
-    SELECT COALESCE(array_agg(x), '{}') INTO v_new FROM unnest(r.nums) x
-     WHERE NOT EXISTS (SELECT 1 FROM contact_phones cp WHERE cp.organization_id = p_org AND cp.e164 = x);
+    IF v_full IS NOT NULL AND v_c ->> 'full_name' IS NULL THEN v_fills := v_fills || jsonb_build_object('full_name', v_full);
+    ELSIF v_full IS NOT NULL AND v_c ->> 'full_name' <> v_full THEN v_diff := v_diff || jsonb_build_object('full_name', jsonb_build_object('have', v_c ->> 'full_name', 'file', v_full)); END IF;
+    IF v_biz IS NOT NULL AND v_c ->> 'business_name' IS NULL THEN v_fills := v_fills || jsonb_build_object('business_name', v_biz);
+    ELSIF v_biz IS NOT NULL AND v_c ->> 'business_name' <> v_biz THEN v_diff := v_diff || jsonb_build_object('business_name', jsonb_build_object('have', v_c ->> 'business_name', 'file', v_biz)); END IF;
+    IF v_email IS NOT NULL AND v_c ->> 'email' IS NULL THEN v_fills := v_fills || jsonb_build_object('email', v_email);
+    ELSIF v_email IS NOT NULL AND v_c ->> 'email' <> v_email THEN v_diff := v_diff || jsonb_build_object('email', jsonb_build_object('have', v_c ->> 'email', 'file', v_email)); END IF;
+    v_new := r.new_nums;
 
     RETURN NEXT jsonb_build_object('row', r.row_no,
       'verdict', CASE WHEN v_fills = '{}' AND cardinality(v_new) = 0 THEN 'unchanged' ELSE 'fill' END,
-      'contact_id', v_c.id, 'contact_name', COALESCE(v_c.full_name, v_c.business_name, 'unnamed contact'),
+      'contact_id', v_c ->> 'id', 'contact_name', v_c ->> 'name',
       'numbers', to_jsonb(r.nums), 'fills', v_fills, 'new_numbers', to_jsonb(v_new), 'differences', v_diff);
   END LOOP;
 END $$;
@@ -367,7 +412,7 @@ COMMENT ON FUNCTION contact_import_classify(uuid, jsonb) IS
   'How each row of a contact import is treated, stated once: preview and commit '
   'both call it, and any other bulk path must too. Matches on phone number '
   'against the firm''s book and the file''s other rows; never on names; never '
-  'guesses. Writes nothing (20261121T1000).';
+  'guesses. Writes nothing (20261120T2330).';
 
 -- The checks both entry points make, once.
 CREATE FUNCTION contact_import_check(p_rows jsonb)
@@ -405,7 +450,7 @@ END $$;
 COMMENT ON FUNCTION preview_contact_import(jsonb) IS
   'For a firm''s owners and managers: what importing these rows would do, row '
   'by row, writing nothing. Held rows carry the contacts a person may pick '
-  'between. Up to 5,000 rows (20261121T1000).';
+  'between. Up to 5,000 rows (20261120T2330).';
 
 -- -----------------------------------------------------------------------------
 -- 6. Commit: classify again, apply, and record enough to reverse by hand
@@ -566,7 +611,7 @@ COMMENT ON FUNCTION commit_contact_import(jsonb, text, jsonb) IS
   '''imported'', and records each change with this import''s id: fills with '
   'from and to, calls with their prior unlinked state. One transaction. A second '
   'commit of the same rows changes nothing for rows with numbers. There is no '
-  'undo; this history is the reversal path (20261121T1000).';
+  'undo; this history is the reversal path (20261120T2330).';
 
 REVOKE ALL ON FUNCTION contact_import_classify(uuid, jsonb) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION contact_import_check(jsonb) FROM PUBLIC, anon;
@@ -583,7 +628,7 @@ GRANT EXECUTE ON FUNCTION commit_contact_import(jsonb, text, jsonb) TO authentic
 DO $rec$
 BEGIN
   PERFORM record_migration(
-    '20261121T1000_contact_import.sql',
+    '20261120T2330_contact_import.sql',
     NULL,
     'Contact import: contact_import_classify (dedupe on number, the one statement), '
     'preview_contact_import (writes nothing), commit_contact_import (creates, '
@@ -766,6 +811,49 @@ COMMIT;
 --   r := r || '26. a professional reads the firm''s imports: ' || (SELECT count(*) FROM contact_imports WHERE organization_id = v_org)
 --          || '   (expect 0: owners and managers)' || chr(10);
 --
---   RAISE EXCEPTION 'VERIFY 20261121T1000_contact_import (all rolled back) %', chr(10) || r;
+--   -- ---- 27. 5,000 rows: the cap, measured -----------------------------------
+--   -- A realistic file at the limit: names, one or two numbers each, a third
+--   -- with a second number, the last 50 repeating earlier rows' numbers. The
+--   -- book by now holds this firm's earlier rows; 150 learned contacts more
+--   -- are added so a slice of the file matches.
+--   PERFORM set_config('request.jwt.claims', json_build_object('sub', a_mo::text)::text, true);
+--   PERFORM set_config('role', 'none', true);
+--   INSERT INTO contacts (organization_id, full_name) SELECT v_org, 'Learned ' || g FROM generate_series(1, 150) g;
+--   INSERT INTO contact_phones (organization_id, contact_id, e164, is_primary)
+--     SELECT v_org, c.id, '+1513' || lpad((2000000 + substr(c.full_name, 9)::int)::text, 7, '0'), true
+--       FROM contacts c WHERE c.organization_id = v_org AND c.full_name LIKE 'Learned %';
+--   PERFORM set_config('role', 'authenticated', true);
+--   SELECT jsonb_agg(jsonb_build_object(
+--            'full_name', 'Person ' || g,
+--            'email', CASE WHEN g % 4 = 0 THEN 'p' || g || '@example.invalid' END,
+--            'phones', jsonb_build_array(jsonb_build_object('number', '(513) ' || substr(lpad((2000000 + CASE WHEN g > 4950 THEN g - 4000 ELSE g END)::text, 7, '0'), 1, 3) || '-'
+--                                                                 || substr(lpad((2000000 + CASE WHEN g > 4950 THEN g - 4000 ELSE g END)::text, 7, '0'), 4)))
+--                      || CASE WHEN g % 3 = 0 THEN jsonb_build_array(jsonb_build_object('number', '+1859' || lpad((3000000 + g)::text, 7, '0'))) ELSE '[]' END)
+--          ORDER BY g)
+--     INTO rows FROM generate_series(1, 5000) g;
+--   DECLARE t0 timestamptz; t_pv numeric; t_cm numeric;
+--   BEGIN
+--     t0 := clock_timestamp(); pv := preview_contact_import(rows); t_pv := extract(epoch FROM clock_timestamp() - t0);
+--     t0 := clock_timestamp(); cm := commit_contact_import(rows, 'zzz-5000.csv'); t_cm := extract(epoch FROM clock_timestamp() - t0);
+--     r := r || '27. 5,000 rows: preview ' || round(t_pv, 2) || ' s, commit ' || round(t_cm, 2) || ' s; '
+--            || 'held ' || (pv #>> '{counts,held}') || ', created ' || (cm ->> 'created')
+--            || '; authenticated''s statement_timeout: '
+--            || COALESCE((SELECT array_to_string(rolconfig, ',') FROM pg_roles WHERE rolname = 'authenticated'), 'not set')
+--            || chr(10) || '   (expect both well under the timeout; held 100: the 50 repeats and the 50 rows they repeat)' || chr(10);
+--   END;
+--
+--   -- ---- 28. a merge chain, which the guard prevents, held if it ever exists --
+--   -- Built by switching triggers off for the fixture (postgres only): the
+--   -- guard refuses this chain from both ends, so this is a bypass, on purpose.
+--   PERFORM set_config('role', 'none', true);
+--   PERFORM set_config('session_replication_role', 'replica', true);
+--   UPDATE contacts SET merged_into = c_x WHERE id = c_surv;          -- Survivor -> Xavier: …05's owner is now two hops away
+--   PERFORM set_config('session_replication_role', 'origin', true);
+--   PERFORM set_config('role', 'authenticated', true);
+--   pv := preview_contact_import(jsonb_build_array(jsonb_build_object('full_name', 'Chain', 'phones', jsonb_build_array(jsonb_build_object('number', num || '5')))));
+--   r := r || '28. a number whose owner was merged into a contact that was itself merged: ' || (pv #>> '{rows,0,verdict}') || '/' || (pv #>> '{rows,0,hold}')
+--          || '   (expect held/merge_chain: never fill a contact that is no longer anybody)' || chr(10);
+--
+--   RAISE EXCEPTION 'VERIFY 20261120T2330_contact_import (all rolled back) %', chr(10) || r;
 -- END $$;
 -- =============================================================================
