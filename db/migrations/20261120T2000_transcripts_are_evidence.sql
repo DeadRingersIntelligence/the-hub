@@ -2,6 +2,35 @@
 -- 20261120T2000_transcripts_are_evidence.sql
 -- The Hub — a transcript is what was said. A firm reads it; nobody rewrites it.
 --
+-- APPLIED to staging (17:53 UTC) and production (17:54 UTC), 20 Nov 2026,
+-- from commit 6ced5ba, sha256 66e7f1a3…f9bb2a9e, loaded whole. ran_md5
+-- e42835ea07be67aa5f8f9ff8d81c1b3e (34181 characters) on both, as predicted.
+-- All 15 verification lines matched on both. The baseline moved acl to 45730,
+-- col to 77668, com to 11671, con to 51269, fn to 13525 and mig to 17719,
+-- each to the character, and nothing else moved. acl was derived rather than
+-- measured: scratch (Postgres 16) gave +370, plus 18 for Postgres 17's owner
+-- MAINTAIN. Line 2b shows postgres:MAINTAIN on both live databases. This note
+-- was added afterwards.
+--
+-- CORRECTIONS AND RULINGS FROM REVIEW AFTER THE RUN. The paragraphs below
+-- are left as they ran:
+--
+--   * "WHAT THE REDACTION CALL CARRIES" POINTS THE WRONG WAY. Whole-segment
+--     mode (no p_passage) is the one to use for anything that must not be
+--     logged, because it sends no text. Passage mode puts the sensitive string
+--     into the request, so redacting a card number by passage writes it into
+--     Supabase's query history, which is less controlled than the table it's
+--     being removed from. Until an offset form exists, redact by whole
+--     segment. THE RIGHT FORM is (segment, start, length, reason): Dead
+--     Ringers can already read the segment to find the offsets, so nothing
+--     sensitive travels. It's on the backlog.
+--   * A REDACTION NEEDS A REAL DEAD RINGERS USER'S SESSION. redacted_by comes
+--     from current_user_id(), so it can't be run as postgres in the SQL editor.
+--     It refuses in words, not with a NOT NULL error. Without app.is_internal
+--     the refusal is "a transcript is redacted by Dead Ringers…"; with it but
+--     no Hub user, "your sign-in isn't linked to a Hub user, so the redaction
+--     can't say who did it". Correct by design: a redaction says who did it.
+--
 -- THE DISTINCTION THIS FILE RESTS ON: THE LOCK PROTECTS WHAT WAS SAID;
 -- ATTRIBUTION IS CORRECTABLE. (Planning and Mandie, 20 November.)
 --
