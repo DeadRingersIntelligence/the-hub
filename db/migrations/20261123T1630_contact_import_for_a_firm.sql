@@ -3,6 +3,46 @@
 -- The Hub — Dead Ringers imports a client firm's contacts, in a database
 -- session, through the same code the firm's own import used.
 --
+-- APPLIED 23 November, as reviewed (commit 50827c7, checked by sha256
+-- 45e5da42…df276a0 before pasting): ledger ran_md5
+-- 5c5406da29ad926fdb52b51c13829411, 57,900 characters (the pasted text, no
+-- final newline), staging 17:15:27 and production 17:17:57 UTC. This note
+-- was added afterwards; the file is otherwise as it ran. All 11 lines of the
+-- verification passed on both, identical apart from timings: line 6's trap
+-- armed and never fired, everything outside firm A unchanged, the deliberate
+-- write to B caught; line 7 refused both shapes in preview and commit.
+--
+-- LINE 11, MEASURED, and THE CAP CAME DOWN TO 10,000 (20261123T1700):
+--                          scratch   staging   production
+--     preview 20,000          -       1.95 s     2.64 s
+--     commit 20,000        7.23 s    25.85 s    28.61 s
+--     deferred checks      0.06 s     0.21 s     0.26 s
+-- 28.87 s passed the 30 s target by 1.1 s. The 16-18 s prediction below was
+-- wrong by about 60%: it passed only because the target sat just above where
+-- it landed, and 20,000 bought nothing (the largest file expected is about
+-- 5,000) for all the margin (Mandie). SCRATCH UNDER-PREDICTED TWICE IN ONE
+-- DAY: by more than 2x against staging in the afternoon, and by about 4x
+-- against production here. Scratch shows shape (linear or not, which step
+-- grows); it must not be used to predict real timings.
+--
+-- FOUND IN REVIEW, recorded here so no one has to derive them:
+--   * THE current_user LOCK DEPENDS ON NOTHING BEING SECURITY DEFINER.
+--     contact_import_apply and contact_import_for_firm_check refuse anon,
+--     authenticated and service_role by current_user. Every import function
+--     is SECURITY INVOKER (2330's four, and section 4's CREATE OR REPLACE
+--     re-asserts it), so current_user is the caller. A SECURITY DEFINER
+--     added anywhere above contact_import_apply would make current_user the
+--     owner and silently defeat the lock: the one accident that undoes this
+--     file's main guarantee. 20261123T1700's verification checks it.
+--   * THE merge_chain SKIP IS LOAD-BEARING. A held merge_chain row carries
+--     no 'candidates' and no 'contact_id', so contact_import_outside_firm
+--     never sees it. That is safe only because contact_import_apply always
+--     skips it: its choice is checked with NOT EXISTS over
+--     jsonb_array_elements(x -> 'candidates'), which is zero rows for a
+--     missing key, so the NOT EXISTS is true and the row is skipped, whatever
+--     p_choices says. Change that check, and the tenant check must learn
+--     merge_chain rows first.
+--
 -- THE DECISION (Mandie, 23 November): contact import is INTERNAL ONLY. Dead
 -- Ringers runs it during onboarding, as SQL in the SQL editor, which runs as
 -- postgres and so isn't held to authenticated's 8 s statement_timeout. No
