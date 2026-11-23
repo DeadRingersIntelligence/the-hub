@@ -31,23 +31,11 @@
 -- transaction: if that transaction aborts, the record goes with it, and if
 -- it commits, the commit follows within the same run.
 --
--- TONIGHT'S SEVEN, BACKFILLED WHERE THEY HAPPENED. Production rolled them
--- back; staging did not. The file can't name its database, so it reads the
--- ledger: where none of the seven has a row (production), it records the
--- seven rollbacks; where all seven do (staging), it records nothing; anything
--- in between refuses. The backfill holds only what is known, at the
--- precision it is known:
---   * applied_at: T1810 exact (18:13:26.142448 UTC); the six to the second
---     (the query that read them truncated the fraction, and the rows are
---     gone, so that is permanent), marked applied_at_precision = 'second';
---   * ran_md5 and ran_len: exact, as each ledger row recorded them, which
---     matched the reviewed commits' pasted hashes;
---   * note: exact, the text each file passed to record_migration;
---   * applied_by, first_applied_at, sha256: not captured: NULL;
---   * rolled_back_at: NOT CAPTURED. NULL, never an estimate. What is certain
---     is the order, kept in rolled_back_order: the six-file rollback
---     committed after T1835 was applied (18:57:32) and before the T1810
---     rollback, both on 23 November, in one session.
+-- TONIGHT'S SEVEN ARE NOT IN THIS FILE. They are facts about production
+-- alone, and this file is schema every database should have: a fresh build
+-- from main runs it with 1810 applied and T1830 to T1835 not (#71 unmerged),
+-- and must not stop there (Mandie's review). The backfill is its own file,
+-- 20261123T2005, with its own preconditions.
 --
 -- track_commit_timestamp: worth deciding, not decided here. With it on,
 -- Postgres keeps each transaction's commit time (pg_xact_commit_timestamp),
@@ -70,22 +58,12 @@ BEGIN;
 -- 1. Preconditions
 -- -----------------------------------------------------------------------------
 DO $$
-DECLARE n int;
 BEGIN
   IF to_regclass('public.schema_rollbacks') IS NOT NULL THEN
     RAISE EXCEPTION 'schema_rollbacks already exists: this file has run here';
   END IF;
   IF to_regprocedure('record_migration(text, text, text, text)') IS NULL THEN
     RAISE EXCEPTION 'record_migration is missing: 20261103T1200 has not run here';
-  END IF;
-  -- Tonight's seven: all in the ledger (staging) or none (production).
-  SELECT count(*) INTO n FROM schema_migrations WHERE filename IN (
-    '20261123T1810_contact_phones_same_firm.sql', '20261123T1830_same_firm_interactions.sql',
-    '20261123T1831_same_firm_people.sql', '20261123T1832_same_firm_contacts.sql',
-    '20261123T1833_same_firm_locations.sql', '20261123T1834_same_firm_accounts_cases_seats.sql',
-    '20261123T1835_same_firm_the_rest.sql');
-  IF n NOT IN (0, 7) THEN
-    RAISE EXCEPTION '% of the seven same-firm files are in this ledger, not 0 (rolled back, as on production) or 7 (applied, as on staging): stop and read it', n;
   END IF;
 END $$;
 
@@ -139,7 +117,8 @@ REVOKE ALL ON schema_rollbacks FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON SEQUENCE schema_rollbacks_id_seq FROM PUBLIC, anon, authenticated, service_role;
 
 -- Append-only, for its owner too: a record of what was removed is not itself
--- removable. (An owner can drop the trigger; that is a migration, reviewed.)
+-- removable, by UPDATE, DELETE or TRUNCATE. (An owner can drop the triggers;
+-- that is a migration, reviewed.)
 CREATE FUNCTION schema_rollbacks_append_only() RETURNS trigger
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 BEGIN
@@ -148,6 +127,11 @@ END $$;
 CREATE TRIGGER schema_rollbacks_append_only_t
   BEFORE UPDATE OR DELETE ON schema_rollbacks
   FOR EACH ROW EXECUTE FUNCTION schema_rollbacks_append_only();
+-- A row trigger doesn't fire on TRUNCATE, which would empty the table
+-- silently (Mandie's review). This one does.
+CREATE TRIGGER schema_rollbacks_no_truncate_t
+  BEFORE TRUNCATE ON schema_rollbacks
+  FOR EACH STATEMENT EXECUTE FUNCTION schema_rollbacks_append_only();
 REVOKE ALL ON FUNCTION schema_rollbacks_append_only() FROM PUBLIC, anon, authenticated, service_role;
 
 -- -----------------------------------------------------------------------------
@@ -180,45 +164,7 @@ COMMENT ON FUNCTION record_rollback(text, text) IS
 REVOKE ALL ON FUNCTION record_rollback(text, text) FROM PUBLIC, anon, authenticated, service_role;
 
 -- -----------------------------------------------------------------------------
--- 4. Tonight's seven, where they were rolled back (production)
--- -----------------------------------------------------------------------------
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM schema_migrations WHERE filename = '20261123T1810_contact_phones_same_firm.sql') THEN
-    RETURN;   -- applied here (staging): nothing was rolled back
-  END IF;
-  INSERT INTO schema_rollbacks (filename, applied_at, applied_at_precision, ran_md5, ran_len, note, ledger_recorded_how,
-                                rolled_back_at, rolled_back_order, rolled_back_by, reason, recorded_how)
-  SELECT f, a::timestamptz, p, md5, len, nt, 'self', NULL,
-         ord, 'Mandie (postgres, SQL editor)', rsn, 'backfill'
-    FROM (VALUES
-      ('20261123T1830_same_firm_interactions.sql', '2026-11-23 18:47:54+00', 'second', '87f57aa514506d667a05cd096aa0c766', 45648,
-       'Same-firm keys, family A: 23 keys onto interactions made composite on organization_id; ON DELETE carried over, SET NULL on the pointer column only.'),
-      ('20261123T1831_same_firm_people.sql', '2026-11-23 18:50:31+00', 'second', 'a8693214179d2ee8a447323c8d597b1b', 44408,
-       'Same-firm keys, family A: 22 keys onto people made composite on organization_id; ON DELETE carried over, SET NULL on the pointer column only.'),
-      ('20261123T1832_same_firm_contacts.sql', '2026-11-23 18:51:48+00', 'second', '6a4840fa00c3b52d8748e6f3224d4ae1', 41966,
-       'Same-firm keys, family A: 18 keys onto contacts made composite on organization_id; ON DELETE carried over, SET NULL on the pointer column only.'),
-      ('20261123T1833_same_firm_locations.sql', '2026-11-23 18:53:44+00', 'second', '9cbc446e5fee82cc9491263419400eaa', 40002,
-       'Same-firm keys, family A: 16 keys onto locations made composite on organization_id; ON DELETE carried over, SET NULL on the pointer column only.'),
-      ('20261123T1834_same_firm_accounts_cases_seats.sql', '2026-11-23 18:55:39+00', 'second', '6e44b36d8b8d1ab151eeaca4e45d6fa0', 45167,
-       'Same-firm keys, family A: 22 keys onto accounts, cases, seats, campaigns, location_groups made composite on organization_id; ON DELETE carried over, SET NULL on the pointer column only.'),
-      ('20261123T1835_same_firm_the_rest.sql', '2026-11-23 18:57:32+00', 'second', 'f00cff40247fb5a6be68b1f2f589fcc6', 51962,
-       'Same-firm keys, family A: 20 keys onto answering_services, auto_tag_rules, contact_imports, custom_field_definitions, decedents, evaluations, marketing_vendors, referral_sources, report_definitions, reporting_periods, rubrics, shops, teams, threads, transcript_segments made composite on organization_id; ON DELETE carried over, SET NULL on the pointer column only.'),
-      ('20261123T1810_contact_phones_same_firm.sql', '2026-11-23 18:13:26.142448+00', 'exact', '42cfaf2f3175f84284059f0636521f51', 15903,
-       'contact_phones -> contacts: both keys composite on organization_id, so a phone record''s contact is at its firm for every role. ON DELETE carried over (CASCADE; SET NULL on the pointer column only). First batch of the same-firm keys.')
-    ) AS v(f, a, p, md5, len, nt)
-    CROSS JOIN LATERAL (SELECT
-      CASE WHEN v.f LIKE '20261123T1810%'
-           THEN 'Committed after the six-file rollback (T1830 to T1835), in the same session on 23 November. Wall-clock time not captured.'
-           ELSE 'Committed with the other five of T1830 to T1835 in one transaction, after T1835 was applied (18:57:32 UTC) and before the T1810 rollback, on 23 November. Wall-clock time not captured.' END AS ord,
-      CASE WHEN v.f LIKE '20261123T1810%'
-           THEN 'Broke the app: the Contacts page failed ("Could not find a relationship between ''contacts'' and ''contact_phones''") from 18:13, when it ran, until this rollback, about two hours (an estimate: broken at 18:13, working when checked after). PostgREST resolves a column hint (contact_phones!contact_id) only for a single-column key, and this made it composite.'
-           ELSE 'Broke the app: "Could not find a relationship between ''interactions'' and ''contacts''" on the first page loaded after the six ran. PostgREST resolves a column hint (contacts!contact_id) only for a single-column key, and these made them composite.' END AS rsn) w
-   ORDER BY v.f;
-END $$;
-
--- -----------------------------------------------------------------------------
--- 5. Record it
+-- 4. Record it
 -- -----------------------------------------------------------------------------
 DO $rec$
 BEGIN
@@ -226,9 +172,8 @@ BEGIN
     '20261123T2000_a_rollback_keeps_its_evidence.sql',
     NULL,
     'schema_rollbacks (append-only) and record_rollback(filename, reason), which '
-    'copies the ledger row, stamps the time and deletes it in one call. On '
-    'production, the seven same-firm rollbacks of 23 November backfilled with what '
-    'survived, at its precision; their rollback times were not captured.');
+    'copies the ledger row, stamps the time and deletes it in one call. Schema '
+    'only; the 23 November rollbacks are backfilled by 20261123T2005.');
 END $rec$;
 
 COMMIT;
@@ -280,20 +225,13 @@ COMMIT;
 --   res := '';
 --   BEGIN UPDATE schema_rollbacks SET reason = 'changed' WHERE filename = 'zzz_verify_rollback.sql'; res := res || 'update: ALLOWED | ';
 --   EXCEPTION WHEN OTHERS THEN res := res || 'update: refused | '; END;
---   BEGIN DELETE FROM schema_rollbacks WHERE filename = 'zzz_verify_rollback.sql'; res := res || 'delete: ALLOWED';
---   EXCEPTION WHEN OTHERS THEN res := res || 'delete: refused'; END;
---   r := r || '4. as postgres: ' || res || '   (expect update: refused | delete: refused)' || chr(10);
---
---   -- ---- 5. tonight's seven, on this database ------------------------------
---   SELECT count(*) INTO n FROM schema_rollbacks WHERE recorded_how = 'backfill';
---   r := r || '5. backfilled rollbacks: ' || n
---          || CASE WHEN n = 0 THEN ' (the seven are applied here: '
---                  || (SELECT count(*) FROM schema_migrations WHERE filename LIKE '20261123T18%_same_firm%' OR filename LIKE '20261123T1810%') || ' in the ledger)'
---                  ELSE ': ' || (SELECT string_agg(left(filename, 13) || ' ' || to_char(applied_at AT TIME ZONE 'UTC', CASE applied_at_precision WHEN 'exact' THEN 'HH24:MI:SS.US' ELSE 'HH24:MI:SS' END) || ' ' || applied_at_precision
---                                                  || ' rolled back ' || COALESCE(rolled_back_at::text, 'not captured'), '; ' ORDER BY applied_at)
---                                 FROM schema_rollbacks WHERE recorded_how = 'backfill') END
---          || chr(10) || '   (expect on production 7: T1810 18:13:26.142448 exact, the six 18:47:54 to 18:57:32 second, every rollback '
---          || '"not captured"; on staging 0, with 7 in the ledger)' || chr(10);
+--   BEGIN DELETE FROM schema_rollbacks WHERE filename = 'zzz_verify_rollback.sql'; res := res || 'delete: ALLOWED | ';
+--   EXCEPTION WHEN OTHERS THEN res := res || 'delete: refused | '; END;
+--   BEGIN TRUNCATE schema_rollbacks; res := res || 'truncate: ALLOWED';
+--   EXCEPTION WHEN OTHERS THEN res := res || 'truncate: refused'; END;
+--   r := r || '4. as postgres: ' || res || '; the row still there: '
+--          || EXISTS (SELECT 1 FROM schema_rollbacks WHERE filename = 'zzz_verify_rollback.sql')
+--          || '   (expect update: refused | delete: refused | truncate: refused; true)' || chr(10);
 --
 --   RAISE EXCEPTION 'VERIFY 20261123T2000_a_rollback_keeps_its_evidence (all rolled back) %', chr(10) || r;
 -- END $$;
