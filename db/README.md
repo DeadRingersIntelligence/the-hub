@@ -335,7 +335,13 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261123T1700`**, the internal import's cap down to
+**Last moved by `20261123T1810`**, the first same-firm keys
+(`contact_phones -> contacts`), run on both databases on 23 November and
+identical on both afterwards, as predicted: `con` +58 (the new unique index,
+and both keys now composite) and `com` +195 (comments on the index and both
+keys). Nothing else moved.
+
+**Before that, by `20261123T1700`**, the internal import's cap down to
 10,000, run on both databases on 23 November and identical on both
 afterwards. As predicted, only the md5s of `com` and `fn` moved (two comments
 and one body replaced) and no length did.
@@ -456,8 +462,8 @@ md5 and length.
 |---|---|---|
 | `acl` | `cde1d6c1023b99fcc74ae7e6d4f01361` | 46968 |
 | `col` | `3e5d0c0753a1d494433f7924e2e60d5c` | 78700 |
-| `com` | `9d44258c815925425bfdfc2476748d91` | 13246 |
-| `con` | `6647ecc45df510c096abd9d31a2104bc` | 51604 |
+| `com` | `0e3b087d3314c162e3b26ca3b1d4f99c` | 13441 |
+| `con` | `538e904872338fe319cace7077589e7b` | 51662 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
 | `fn` | `b6e05653c8370bb2b66ab24a8cd32510` | 15052 |
 | `mig` | `703a63ebb51590eed6688ffa916e7b82` | 17965 |
@@ -878,7 +884,9 @@ point at shared-library rows whose `organization_id` is NULL, by design.
 (`IS DISTINCT FROM` counts those as mismatches; count with `<>` on the
 family-A keys, where both sides are NOT NULL.)
 
-**Family A: 123 keys, both sides NOT NULL. A composite key, in batches.**
+**Family A: 123 keys onto 24 target tables, both sides NOT NULL. A
+composite key, in batches.** By ON DELETE: SET NULL 66, CASCADE 54, RESTRICT
+2, NO ACTION 1, SET DEFAULT 0 (measured on both databases, 23 November).
 `contact_phones -> contacts` went first (`20261123T1810`), as the one the
 import exposed. Every later batch follows it:
 1. a unique index on the target's `(id, organization_id)`;
@@ -890,11 +898,25 @@ import exposed. Every later batch follows it:
    `organization_id` included, which is NOT NULL, so a delete that used to
    clear a pointer fails instead (`23502`). Write
    `ON DELETE SET NULL (x_id)` (Postgres 15+). So compare `confdelsetcols`
-   as well as `confdeltype`; the type alone says "SET NULL" either way. 96
-   keys in this schema are SET NULL or SET DEFAULT, so this is most of the
-   job, not a corner of it;
+   as well as `confdeltype`; the type alone says "SET NULL" either way. 66
+   of family A's 123 are SET NULL, so this is most of the job, not a corner
+   of it. None is SET DEFAULT, which would be worse: the default itself
+   would have to satisfy the key;
 4. `ON UPDATE NO ACTION`, never CASCADE: a parent doesn't change firm, and
    CASCADE would move its children quietly instead of refusing.
+**Locks, before a big table.** A plain `CREATE UNIQUE INDEX` blocks writes
+to the target while it builds, and the `ALTER TABLE` that drops and re-adds
+the key holds an ACCESS EXCLUSIVE lock on the referencing table while it
+checks every existing row. Instant on today's tables; not on `interactions`
+or `change_history` at volume. The plan for those, to be decided before the
+first one, not when it bites: build the index with `CONCURRENTLY` as its own
+step (it can't run inside a transaction, so that file can't be one
+`BEGIN … COMMIT`); swap the key with `NOT VALID`, which checks new writes at
+once and skips the scan, so the exclusive lock is momentary; then
+`VALIDATE CONSTRAINT` in its own transaction, which scans without blocking
+writes. The precondition that counts zero mismatches still runs first, so
+nothing waits unchecked that isn't already known to be clean.
+
 Each batch's verification shows the refusal across firms, the same-firm
 write allowed, each delete behaviour as it was, and the catalogue's keys
 (columns, `confdeltype`, `confdelsetcols`, `confupdtype`). Predict `con` per

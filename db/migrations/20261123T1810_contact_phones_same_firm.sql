@@ -3,6 +3,30 @@
 -- The Hub — a phone record's contact is at the phone record's firm, by the
 -- schema, not only by the importer.
 --
+-- APPLIED 23 November, as reviewed (commit 9ec187e, checked by sha256
+-- before pasting): ledger ran_md5 42cfaf2f3175f84284059f0636521f51, 15,903
+-- characters, staging 18:12:37 and production 18:13:26 UTC. This note was
+-- added afterwards; the file is otherwise as it ran. All 6 lines of the
+-- verification passed on both, identically: line 4's delete of the
+-- merged-from contact cleared only the pointer and kept organization_id, and
+-- line 5's catalogue reads "delete n set merged_from_contact_id". The nine
+-- matched the prediction (con +58, com +195).
+--
+-- FAMILY A, MEASURED BY ON DELETE on both databases after the run (Mandie):
+-- 123 keys onto 24 target tables, each target needing the unique index.
+-- SET NULL 66 (the column-list form, every one: 54% of the family, not a
+-- corner), CASCADE 54, RESTRICT 2, NO ACTION 1, SET DEFAULT 0 (which would
+-- have been worse: the default itself would have to satisfy the key). The
+-- 140 below is every key with the shape; size later batches against 123.
+-- The brief said "carry confdeltype over exactly"; that isn't enough, and
+-- confdelsetcols is where the difference shows.
+--
+-- LOCKS, for the big tables later: this file's index build blocks writes to
+-- contacts while it runs, and its ALTER TABLE, because it drops a
+-- constraint, holds an ACCESS EXCLUSIVE lock on contact_phones while it
+-- checks every existing row. Instant here; not on interactions or
+-- change_history at volume. db/README.md, "Same-firm keys", has the plan.
+--
 -- THE HOLE. contact_phones has a foreign key to organizations and a separate
 -- one to contacts, and nothing says the two firms agree. Found writing
 -- 20261123T1630: under postgres (BYPASSRLS) a phone row of firm A on firm B's
