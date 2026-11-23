@@ -335,7 +335,18 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261123T1810`**, the first same-firm keys
+**THE TWO DATABASES DIFFER, 23 November, evening.** `20261123T1810` and
+`T1830` to `T1835` broke the app's embeds (see "A schema change is done when
+the app works") and are **rolled back on production**, whose schema is again
+as it was after `20261123T1700`. **Staging still has all seven**, kept to
+diagnose, and reads `com` 14655, `con` 53170. The table below is
+**production's**: the rows after `T1700`, which the rollback restores exactly
+(every key to its pinned single-column text, every new index and its comment
+dropped). Measured on production after the rollback, 23 November: all nine
+exactly the rows after `T1700`, `com` `9d44258c…` and `con` `6647ecc4…`
+included, bit for bit. The rollbacks are proven clean, not believed clean.
+
+**Moved, then restored on production, by `20261123T1810`**, the first same-firm keys
 (`contact_phones -> contacts`), run on both databases on 23 November and
 identical on both afterwards, as predicted: `con` +58 (the new unique index,
 and both keys now composite) and `com` +195 (comments on the index and both
@@ -462,8 +473,8 @@ md5 and length.
 |---|---|---|
 | `acl` | `cde1d6c1023b99fcc74ae7e6d4f01361` | 46968 |
 | `col` | `3e5d0c0753a1d494433f7924e2e60d5c` | 78700 |
-| `com` | `0e3b087d3314c162e3b26ca3b1d4f99c` | 13441 |
-| `con` | `538e904872338fe319cace7077589e7b` | 51662 |
+| `com` | `9d44258c815925425bfdfc2476748d91` | 13246 |
+| `con` | `6647ecc45df510c096abd9d31a2104bc` | 51604 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
 | `fn` | `b6e05653c8370bb2b66ab24a8cd32510` | 15052 |
 | `mig` | `703a63ebb51590eed6688ffa916e7b82` | 17965 |
