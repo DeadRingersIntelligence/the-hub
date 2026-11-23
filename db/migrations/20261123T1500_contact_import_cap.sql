@@ -3,24 +3,36 @@
 -- The Hub — a contact import is capped at what the database can commit well
 -- inside the statement timeout.
 --
--- DRAFT: THE CAP IS NOT SET. Every place it goes reads __CAP__, which isn't
--- SQL, so this file cannot run until the number is in. The number comes from
--- db/measurements/contact_import_timing_*.sql, one size per run, on STAGING
--- after the compute upgrade, from a quiet database (Mandie's ruling, 23
--- November). Those files measure the commit as section 3 below leaves it.
+-- THE CAP IS 1,500 (Mandie, 23 November), from
+-- db/measurements/contact_import_timing_2000_*.sql run on PRODUCTION, from a
+-- quiet database, with section 3's commit swapped in:
+--   2,000 rows into a 10,000-contact book: preview 0.65 s, commit 2.88 s (36%)
+--   2,000 rows into a 150-contact book:    preview 0.93 s, commit 3.85 s (48%)
+-- THE SMALL BOOK IS THE SLOW CASE: 1,885 creates against 326, and a create
+-- costs more than a fill. The binding case is a new firm with an empty book,
+-- which is also the first import any firm makes. 3,000 wasn't run: 2,000 was
+-- already at 48%. 1,500 extrapolates to about 2.9 s, and the cap is NOT set
+-- on that extrapolation: line 3 of the verification times a file at the cap,
+-- into a small book, against a third of the timeout, and that reading on
+-- production decides. Over a third, and the cap drops to 1,000 before this
+-- merges.
+--
+-- WHY PRODUCTION, NOT STAGING. The ruling was staging, but staging is still
+-- Nano (effective_cache_size 384 MB) and production is now Micro (768 MB):
+-- staging would have set the cap against hardware the app never runs on.
 --
 -- WHY. 20261120T2330 promised 5,000 rows. On staging its 5,000-row commit took
 -- 8.07 s, and 8.25 s on production, against authenticated's 8 s
 -- statement_timeout: through the app, a 5,000-row import would time out every
--- time. Scratch had said 3.6 s. Both databases are Micro (1 GB, shared CPU),
+-- time. Scratch had said 3.6 s. Both databases were small instances then,
 -- whose disk IO budget depletes under sustained writes; three timing runs on
--- staging went fast, slower, stalled.
+-- staging went fast, slower, stalled. Production has since moved to Micro.
 --
 -- THE RULING (23 November):
---   * the cap is set from a STAGING measurement, never scratch;
+--   * the cap is set from a measurement on the hardware the app runs on,
+--     never scratch (ruled as staging; measured on production, see above);
 --   * the commit at the cap lands at about A THIRD of the timeout, not just
---     under it: a firm's second import runs against a bigger book, and
---     production is slower than staging;
+--     under it: imports run against books and histories that only grow;
 --   * ONE TRANSACTION, KEPT. No chunking into several calls to keep a higher
 --     cap: atomicity is why there is no undo, and a half-finished import with
 --     no undo is a worse trade than a smaller cap;
@@ -56,7 +68,7 @@
 -- Same results: 2330's verification, all 28 lines, passes with this body on
 -- scratch; lines 4 to 6 below re-check the link rules. After: 2,000 into
 -- 10,000 0.73 s, 3,000 into 10,000 1.09 s, 5,000 into 150 2.16 s (scratch,
--- which reads fast: the cap still comes from staging). Also: v_added, the
+-- which reads fast; the production figures are above). Also: v_added, the
 -- numbers a held row added, is now reset for each row; before, it carried
 -- over, harmlessly, because nothing read it for linking.
 --
@@ -82,12 +94,6 @@ BEGIN;
 DO $$
 DECLARE v text;
 BEGIN
-  -- In PL/pgSQL an unset __CAP__ would parse as a variable name and fail only
-  -- when called, which is worse than not running. So the file refuses here
-  -- until the number is written in.
-  IF '__CAP__' !~ '^[0-9]+$' THEN
-    RAISE EXCEPTION 'DRAFT: the cap is not set; write the staging-measured number in place of every __CAP__ first';
-  END IF;
   IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE filename = '20261120T2330_contact_import.sql') THEN
     RAISE EXCEPTION '20261120T2330 has not run here; run it first';
   END IF;
@@ -117,23 +123,23 @@ BEGIN
     RAISE EXCEPTION 'the import needs a list of rows';
   END IF;
   n := jsonb_array_length(p_rows);
-  -- The cap: measured on staging so the commit lands at about a third of
+  -- The cap: measured on production so the commit lands at about a third of
   -- authenticated's statement_timeout (20261123T1500). One transaction, kept.
-  IF n > __CAP__ THEN
+  IF n > 1500 THEN
     RAISE EXCEPTION 'This file has % rows; the limit is %. Split it into % files and import each.',
-      to_char(n, 'FM999,999'), to_char(__CAP__, 'FM999,999'), ceil(n / __CAP__::numeric);
+      to_char(n, 'FM999,999'), to_char(1500, 'FM999,999'), ceil(n / 1500::numeric);
   END IF;
   RETURN v_org;
 END $$;
 
 COMMENT ON FUNCTION contact_import_check(jsonb) IS
   'The checks both import entry points make, once: owners and managers only, a '
-  'list of rows, and at most __CAP__ of them, a figure measured on staging so '
+  'list of rows, and at most 1,500 of them, a figure measured on production so '
   'the commit lands at about a third of the statement timeout (20261123T1500).';
 COMMENT ON FUNCTION preview_contact_import(jsonb) IS
   'For a firm''s owners and managers: what importing these rows would do, row '
   'by row, writing nothing. Held rows carry the contacts a person may pick '
-  'between. Up to __CAP__ rows (20261120T2330, 20261123T1500).';
+  'between. Up to 1,500 rows (20261120T2330, 20261123T1500).';
 
 -- -----------------------------------------------------------------------------
 -- 3. The commit, linking past calls without a scan per call. Signature,
@@ -323,8 +329,8 @@ BEGIN
   PERFORM record_migration(
     '20261123T1500_contact_import_cap.sql',
     NULL,
-    'Contact import capped at __CAP__ rows (was 5,000, which took 8 s on staging '
-    'against an 8 s timeout), measured on staging to land at about a third of '
+    'Contact import capped at 1,500 rows (was 5,000, which took 8 s on staging '
+    'against an 8 s timeout), measured on production to land at about a third of '
     'the timeout; one transaction kept. The refusal says how many files. The '
     'commit links past calls without a scan per call (same rules).');
 END $rec$;
@@ -335,6 +341,13 @@ COMMIT;
 -- Verification — run AFTER the file, as its own statement. One block,
 -- everything rolled back by the closing RAISE. As authenticated, a fixture
 -- manager at a fixture firm.
+--
+-- LINE 3 IS THE MEASUREMENT THAT CONFIRMS THE CAP: 1,500 rows into a
+-- 150-contact book, the binding case. On production, run this block from a
+-- quiet database (a few minutes after anything else that wrote in bulk,
+-- including the timing files), and read nothing into a slow line 3 that
+-- followed another run closely. The block writes and rolls back about 5,000
+-- rows.
 --
 -- DO $$
 -- DECLARE
@@ -379,20 +392,20 @@ COMMIT;
 --   -- ---- 1-2. the cap, and the refusal above it ----------------------------
 --   r := r || '1. the cap in contact_import_check: '
 --          || (SELECT substring(prosrc FROM 'n > ([0-9]+)') FROM pg_proc WHERE proname = 'contact_import_check')
---          || '   (expect __CAP__)' || chr(10);
+--          || '   (expect 1500)' || chr(10);
 --   BEGIN PERFORM preview_contact_import((SELECT jsonb_agg(jsonb_build_object('full_name', 'x')) FROM generate_series(1, 5000)));
 --     res := 'ALLOWED';
 --   EXCEPTION WHEN OTHERS THEN res := SQLERRM; END;
 --   r := r || '2. 5,000 rows: ' || res || chr(10)
---          || '   (expect "This file has 5,000 rows; the limit is ' || to_char(__CAP__, 'FM999,999') || '. Split it into '
---          || ceil(5000 / __CAP__::numeric) || ' files and import each.")' || chr(10);
+--          || '   (expect "This file has 5,000 rows; the limit is ' || to_char(1500, 'FM999,999') || '. Split it into '
+--          || ceil(5000 / 1500::numeric) || ' files and import each.")' || chr(10);
 --
 --   -- ---- 3. a file at the cap, timed against a third of the timeout ---------
 --   SELECT jsonb_agg(jsonb_build_object('full_name', 'Person ' || g,
 --            'email', CASE WHEN g % 4 = 0 THEN 'p' || g || '@example.invalid' END,
 --            'phones', jsonb_build_array(jsonb_build_object('number', '+1513' || lpad((2000000 + g)::text, 7, '0')))
 --                      || CASE WHEN g % 3 = 0 THEN jsonb_build_array(jsonb_build_object('number', '+1859' || lpad((3000000 + g)::text, 7, '0'))) ELSE '[]' END)
---          ORDER BY g) INTO rows FROM generate_series(1, __CAP__) g;
+--          ORDER BY g) INTO rows FROM generate_series(1, 1500) g;
 --   t0 := clock_timestamp(); pv := preview_contact_import(rows); t_pv := extract(epoch FROM clock_timestamp() - t0);
 --   t0 := clock_timestamp(); cm := commit_contact_import(rows, 'zzz-cap.csv'); t_cm := extract(epoch FROM clock_timestamp() - t0);
 --   SELECT substring(c FROM 'statement_timeout=(.*)') INTO tmo
@@ -404,7 +417,8 @@ COMMIT;
 --          || ' s; created ' || (cm ->> 'created') || '; statement_timeout ' || COALESCE(tmo, 'not set')
 --          || CASE WHEN tmo_s IS NULL THEN '' WHEN t_cm <= tmo_s / 3 THEN ', commit within a third of it'
 --                  ELSE ', COMMIT OVER A THIRD OF IT' END
---          || chr(10) || '   (expect "commit within a third of it" on staging and production)' || chr(10);
+--          || chr(10) || '   (expect "commit within a third of it" ON PRODUCTION, which decides; staging is Nano and may'
+--          || ' not)' || chr(10);
 --
 --   -- ---- 4-6. the commit links past calls by the same rules (section 3) -----
 --   -- A new contact for …9031, and a held row (…9032 and …9033: two contacts)
