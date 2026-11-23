@@ -585,6 +585,15 @@ END $rec$;
 COMMIT;
 
 -- =============================================================================
+-- SUPERSEDED BY 20261123T1700: lines 10 and 11 of this verification test the
+-- 20,000 cap, which is now 10,000. Line 10's expectation no longer matches,
+-- and line 11 is refused by the cap and NOT caught: re-running this block as
+-- written aborts at line 11 and prints nothing, losing lines 1 to 10. The
+-- results in the APPLIED note at the top are the record of what it reported
+-- when it ran. To re-check the import itself, run lines 1 to 9 (the fixture,
+-- and nothing after line 9's chunk) and take the cap from 1700's own
+-- verification. (Added after the run, 23 November.)
+-- =============================================================================
 -- Verification — run AFTER the file, as its own statement. One block,
 -- everything rolled back by the closing RAISE. AS postgres, in the SQL
 -- editor: that is how imports run, and the point is what holds where
