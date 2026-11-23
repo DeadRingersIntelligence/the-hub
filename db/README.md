@@ -1720,6 +1720,34 @@ So the pattern gains two steps, and a schema change isn't done without both:
    loaded and what they showed. The verification block still runs; it just
    isn't the whole of "done".
 
+**Passing means the data that depends on the change appears, not that the
+page loads.** A query that fails can render as an empty list, a blank field or
+a missing badge, with the page otherwise fine: the silent version of what
+happened to Contacts. So for each page, name the thing that only shows if the
+changed relationship resolves (a contact's phone numbers, a call's handler,
+a case's arranging person) and check that it's there, on a row known to have
+one. "The page loaded" passes a broken embed.
+
+**A schema reload that doesn't fix it means it isn't the cache.** PostgREST
+caches the schema; `NOTIFY pgrst, 'reload schema';` refreshes it. If an embed
+fails after a schema change, reload once. If it still fails, the change itself
+is what the API can't resolve (as with family A's composite keys): roll back
+or fix the query, and don't reload again expecting a different answer.
+
+### A rollback keeps its evidence
+
+On 23 November `20261123T1810` and `T1830` to `T1835` were rolled back on
+production, and the rollback deleted their rows from `schema_migrations`. The
+ledger then said the seven had never run, though `T1810` had been live for two
+hours and broken a client-facing page; the evidence of when went with the
+rows. **Until there is a table for it, a rollback copies every column of each
+ledger row it removes into the migration file's annotation, in the same
+session, before the PR that records the rollback merges**, with the time the
+rollback committed. The backlog carries the durable fix: an append-only
+record of rollbacks, written by the same call that removes the ledger row, so
+that `schema_migrations` keeps meaning "applied now" (six files' preconditions
+read it that way) and the history survives a re-run.
+
 ## A comment states what the code proves, not what you concluded
 
 Write what the code establishes. If you want to record what you concluded from
