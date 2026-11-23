@@ -2,6 +2,13 @@
 -- 20261123T1832_same_firm_contacts.sql
 -- The Hub — same-firm keys, family A: contacts.
 --
+-- APPLIED 23 November, as reviewed (commit e033b69, checked by sha256
+-- before pasting): ledger ran_md5 6a4840fa00c3b52d8748e6f3224d4ae1, 41,966
+-- characters, on staging and then production, with the other five of the
+-- set, between 18:45 and 18:57 UTC. This note was added afterwards; the file
+-- is otherwise as it ran. All 5 lines of the verification read N of N on both
+-- databases, and the nine matched the prediction.
+--
 -- 18 foreign keys from 15 tables onto 1 target (contacts) become composite on
 -- organization_id, so a row's parent is at the row's firm for every role,
 -- postgres included.

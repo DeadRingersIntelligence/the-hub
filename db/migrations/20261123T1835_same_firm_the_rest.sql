@@ -2,6 +2,15 @@
 -- 20261123T1835_same_firm_the_rest.sql
 -- The Hub — same-firm keys, family A: the fifteen remaining targets.
 --
+-- APPLIED 23 November, as reviewed (commit e033b69, checked by sha256
+-- before pasting): ledger ran_md5 f00cff40247fb5a6be68b1f2f589fcc6, 51,962
+-- characters, on staging and then production, with the other five of the
+-- set, between 18:45 and 18:57 UTC. This note was added afterwards; the file
+-- is otherwise as it ran. Lines 1 to 5 of the verification read N of N on both
+-- databases, and the nine matched the prediction.
+-- LINE 6, ON BOTH: "family A keys left: 0; composite same-firm keys in place:
+-- 123". Family A is done, not believed done.
+--
 -- 20 foreign keys from 18 tables onto 15 targets (answering_services,
 -- auto_tag_rules, contact_imports, custom_field_definitions, decedents,
 -- evaluations, marketing_vendors, referral_sources, report_definitions,

@@ -335,7 +335,15 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261123T1810`**, the first same-firm keys
+**Last moved by `20261123T1830` to `T1835`**, the rest of family A's
+same-firm keys (121), run in order on both databases on 23 November, each
+on staging and then production, and identical on both afterwards. Only `com`
+and `con` moved, as predicted at every one of the six checkpoints: each new
+unique `(id, organization_id)` index and its comment add length (23 targets;
+`contacts`' index was 1810's, so `T1832` moved `con`'s md5 alone), and the
+keys' new definitions move `con`'s md5, not its length.
+
+**Before that, by `20261123T1810`**, the first same-firm keys
 (`contact_phones -> contacts`), run on both databases on 23 November and
 identical on both afterwards, as predicted: `con` +58 (the new unique index,
 and both keys now composite) and `com` +195 (comments on the index and both
@@ -462,8 +470,8 @@ md5 and length.
 |---|---|---|
 | `acl` | `cde1d6c1023b99fcc74ae7e6d4f01361` | 46968 |
 | `col` | `3e5d0c0753a1d494433f7924e2e60d5c` | 78700 |
-| `com` | `0e3b087d3314c162e3b26ca3b1d4f99c` | 13441 |
-| `con` | `538e904872338fe319cace7077589e7b` | 51662 |
+| `com` | `8aab9dbc7c6c91718fb6fcfbdf98c567` | 14655 |
+| `con` | `90079e40c7eb8cd2845debfd15a1a0a9` | 53170 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
 | `fn` | `b6e05653c8370bb2b66ab24a8cd32510` | 15052 |
 | `mig` | `703a63ebb51590eed6688ffa916e7b82` | 17965 |
@@ -778,6 +786,14 @@ contact_b_id`, and `contact_phones` needing `organization_id`. The fix is
 mechanical: before the `INSERT`, read that table's `NOT NULL` columns without
 defaults, its `CHECK` constraints and its uniques.
 
+**"Success. No rows returned" is the failure signature.** Every verification
+block ends in a RAISE, so a run that reports success didn't run the block.
+On 23 November Supabase's SQL editor showed a "Potential issue detected:
+destructive operations" modal on blocks containing DELETE (the same-firm
+files' delete checks), and a Run click that only opened the modal left the
+results pane showing the previous statement's "Success", which looks exactly
+like a pass. Read the RAISE's text, never the pane's status.
+
 **A refusal check must test the reason.** A handler that treats any error as a
 pass cannot tell a working rule from a missing function — one of these
 "passed" because the function did not exist in that transaction yet. Compare
@@ -921,6 +937,20 @@ Each batch's verification shows the refusal across firms, the same-firm
 write allowed, each delete behaviour as it was, and the catalogue's keys
 (columns, `confdeltype`, `confdelsetcols`, `confupdtype`). Predict `con` per
 batch: each batch adds an index and changes key definitions.
+
+**Family A is done** (`20261123T1810`, `T1830` to `T1835`, 23 November):
+123 keys onto 24 targets, every one composite. `T1835`'s verification
+re-runs the audit, and on both databases it read "family A keys left: 0;
+composite same-firm keys in place: 123". Each file's verification tested
+every one of its keys on a real row: refused across firms by the key
+itself, allowed within the firm, and the delete rule as before.
+
+**Found on the way, unchanged by it:** deleting a person fails if they
+handled an attributed call or hold a named seat. The key clears
+`interactions.handler_person_id` or `seats.person_id`, and
+`interactions_attribution_ck` or `seats_named_ck` then refuses the row. The
+single-column keys did the same. Whether such a person should be deletable
+at all is a backlog question.
 
 **Family B: 10 keys whose targets hold shared rows (`tags`,
 `picklist_items`, `phone_numbers`). Not declarative, and not forced.** The
