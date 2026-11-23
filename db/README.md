@@ -1673,6 +1673,34 @@ found only those two. It cannot see a branch deleted after a late push —
 those commits are simply gone — which is one more reason the push has to
 come before the merge.
 
+### A schema change is done when the app works, not when the catalogue agrees
+
+**Verification that only reads the catalogue verifies the catalogue.** On 23
+November family A's six files (`20261123T1830` to `T1835`) passed all 32
+verification lines on both databases, the closing audit read 0, and the
+baseline matched at every checkpoint. The app then failed on its first page:
+*"Could not find a relationship between 'interactions' and 'contacts' in the
+schema cache"*. PostgREST works out an embed from the foreign keys, and it
+accepts a column name as a hint (`contacts!contact_id`) only while the key is
+a single column (`findRel` in its `Plan.hs`); the files had made them
+`(contact_id, organization_id)`. Production was rolled back; staging kept the
+six to diagnose. `20261123T1810` had already done the same to
+`contact_phones!contact_id` on production, unnoticed, because nothing loaded
+the pages that use it.
+
+So the pattern gains two steps, and a schema change isn't done without both:
+1. **Before writing it, read what the app does with what it changes.** Search
+   hellophone for every table, column and constraint the file touches:
+   `.from('…')`, embeds (`table(…)` and `table!hint(…)`), `.rpc('…')`, and any
+   error code the app matches on. List the pages that use them in the PR.
+   Embed hints name the constraint, never a column (hellophone's lint rule
+   refuses a column hint), so a key can change shape without breaking them.
+2. **After applying on staging, load the app against staging and exercise
+   those pages** before production runs, and again on production after. A
+   Vercel preview of hellophone reads staging. The PR says which pages were
+   loaded and what they showed. The verification block still runs; it just
+   isn't the whole of "done".
+
 ## A comment states what the code proves, not what you concluded
 
 Write what the code establishes. If you want to record what you concluded from
