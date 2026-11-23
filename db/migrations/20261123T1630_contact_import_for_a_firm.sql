@@ -55,6 +55,11 @@
 --     held 2 contacts on 23 November), so each scanned a table the import was
 --     growing. With fresh plans: 0.37 ms per row, flat from 5,000 to 40,000.
 --     The app's path never went above 1,000 rows, where this barely showed.
+--     READ WITH 1600's APPLIED NOTE: this is probably part of the ~2.07 s
+--     "fixed cost" measured on production that afternoon (two points, 1,000
+--     and 2,000 rows, both into a nearly empty database), and so part of why
+--     the app's cap landed at 1,000. The same bug, seen from the other end.
+--     It changes nothing now: the app's path is closed (section 4).
 --
 -- THE CLIENT PATH IS CLOSED IN THE CATALOGUE. preview_contact_import,
 -- commit_contact_import, contact_import_check and contact_import_classify
@@ -63,8 +68,8 @@
 -- would leave the catalogue saying something false. Re-exposing import to
 -- clients is a reviewed change, not a grant: it would lift the lock for a
 -- caller importing into their own firm as themselves. 1600's 1,000 cap stays
--- in contact_import_check as the record of what is safe through
--- authenticated.
+-- in contact_import_check as the record of that measurement, NOT as a live
+-- limit; its comment now says so (Mandie, 23 November).
 --
 -- THE INTERNAL CAP: 20,000 ROWS, proposed. The ceiling is no longer the 8 s
 -- statement_timeout but the SQL editor's gateway, which cut runs off twice on
@@ -411,6 +416,12 @@ COMMENT ON FUNCTION commit_contact_import(jsonb, text, jsonb) IS
   'may execute it, and contact_import_apply refuses them. Kept so the rules '
   'have one body if import is ever offered to clients again, which would be a '
   'reviewed change, not a grant.';
+COMMENT ON FUNCTION contact_import_check(jsonb) IS
+  'The app''s import checks: owners and managers only, a list of rows, at most '
+  '1,000. CLOSED since 20261123T1630: no API role may execute it, so the 1,000 '
+  'is the record of what 20261123T1600 measured as safe through authenticated, '
+  'not a live limit. Dead Ringers'' imports use contact_import_for_firm_check '
+  '(a 20,000 cap).';
 COMMENT ON FUNCTION preview_contact_import(jsonb) IS
   'For a firm''s owners and managers: what importing these rows would do, row '
   'by row, writing nothing. Up to 1,000 rows (20261120T2330, 20261123T1600). '
