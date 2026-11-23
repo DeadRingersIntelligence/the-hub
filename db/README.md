@@ -329,13 +329,28 @@ case_need_type` made a `Y case_need_type` key appear, the count went 147 → 148
 and the rollback returned it to `968257c6…`. So `Y = 0` means no type carries
 a comment, not that the query cannot see one.
 
-### The baseline, 20 November 2026
+### The baseline, 23 November 2026
 
 All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261120T2300`**, run on both databases on 20 November and
+**Last moved by `20261120T2330`, `20261123T1500` and `20261123T1600`
+together**, the contact import and its two follow-ups, all run on both
+databases on 23 November, with the nine checked once after the third and
+identical on both. Every length matched the prediction made before the runs.
+2330 moved the lengths: `acl` +581, `col` +891, `com` +465, `con` +375,
+`fn` +372, `mig` +222 and `trg` +99, for the `contact_imports` table, its
+policies and grants, `contacts.import_id`, the new trigger and the four new
+functions. `defacl` and `typ` held. On production `acl` carries 18 more
+characters than scratch predicts, for `MAINTAIN` on the new table (Postgres
+17). 1500 (the commit's body, the cap, a comment) and 1600 (the cap again)
+replaced bodies and comments only, so they moved the md5s of `fn` and `com`
+and no length: **a changed body moves a row's md5 alone**, again. Checked once
+at the end, by ruling: running the nine between files would have measured
+states neither database kept.
+
+**Before that, by `20261120T2300`**, run on both databases on 20 November and
 identical on both afterwards. All nine matched the predicted table: `acl` (−148),
 `com` (+248), `fn` (+18) and `mig` (+24) moved, and the other five held. Review
 derived three from first principles before the run:
@@ -424,14 +439,14 @@ md5 and length.
 
 | query | md5 | characters |
 |---|---|---|
-| `acl` | `f9804fca07a295a7e0b8d73ffc6f4450` | 46093 |
-| `col` | `01d89a8b21f8c57bd5232fee77209467` | 77809 |
-| `com` | `ca65ff7809ad64098bca1efea22f16ec` | 12419 |
-| `con` | `a0f9680beb1354c63e09bee1b0cd175d` | 51229 |
+| `acl` | `9638770d04c225f85e859a5700dfee9d` | 46674 |
+| `col` | `3e5d0c0753a1d494433f7924e2e60d5c` | 78700 |
+| `com` | `e226e1f3d941ccc54671d4bc9ddc7b52` | 12884 |
+| `con` | `6647ecc45df510c096abd9d31a2104bc` | 51604 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `6110e9eee72116c9ec40dc6e2a5f9b0d` | 14192 |
-| `mig` | `8960a2368bcb39a1f292a193a4271874` | 17743 |
-| `trg` | `016fee0defb25d359e0aabeba8f93c8e` | 7084 |
+| `fn` | `218fc27fc2f97b4341160121ee11212e` | 14564 |
+| `mig` | `703a63ebb51590eed6688ffa916e7b82` | 17965 |
+| `trg` | `d95c17a65fc0670b4f4223cc21a76cb8` | 7183 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
 
 **A migration applied to both databases moves the baseline, and the migration
