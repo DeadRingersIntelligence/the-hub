@@ -3,6 +3,35 @@
 -- The Hub — a firm brings its contact list in, and sees what will happen
 -- before anything is written.
 --
+-- APPLIED to staging (14:11 UTC) and production (14:13 UTC), 23 Nov 2026,
+-- loaded whole. ran_md5 92a49bf538c232673ce7a692c2407d5a (57143 characters) on
+-- both. This note was added afterwards; nothing below it was changed.
+--
+-- WHAT THE VERIFICATION SHOWED, AND HOW IT WAS RUN:
+--   * LINE 28 CANNOT RUN ON SUPABASE. set_config('session_replication_role',
+--     'replica') needs a superuser, and Supabase's postgres isn't one. The
+--     block died at that line with 42501 and printed nothing, lines 1-27
+--     included, because the report is the closing RAISE. It was re-run with
+--     line 28 cut out (the cut points checked first), the closing RAISE kept:
+--     an EDITED block, flagged as such. Results below come from it. Scratch,
+--     where postgres is a superuser, could not show this.
+--   * 26 of the 27 runnable lines matched, identically on both databases.
+--   * LINE 27 DID ITS JOB AND FAILED: 5,000 rows took preview 1.63 s / commit
+--     8.07 s on staging and 2.37 s / 8.25 s on production, against
+--     authenticated's 8 s statement_timeout. Scratch had said 3.6 s. A
+--     5,000-row import through the app would time out every time.
+--   * Run on production all the same, for parity: nothing calls these
+--     functions yet, so a wrong cap costs nothing for now, and both databases
+--     running the same md5 under this name is worth more.
+--
+-- FOLLOW-UP, A NEW FILE, NOT AN EDIT TO THIS ONE (ruled 23 November): it lowers
+-- the cap to a figure measured on staging, about a third of the timeout, in
+-- ONE transaction (atomicity is why there is no undo), and replaces line 28
+-- with one that runs where it has to. The cap waits for a compute upgrade: both
+-- databases are Micro (1 GB, shared CPU), whose disk IO budget depletes under
+-- sustained writes. On staging three timing runs went fast, slower, stalled
+-- (1,000 rows: 1.48 s, then 20.74 s, then a gateway timeout).
+--
 -- WHY. The day-one gap (planning, 20 November): everything built this week
 -- keys off contacts, and a firm arrives with its book in a spreadsheet. Until
 -- it's in, B's offer (20261120T1600) almost never fires. Mandie: up to 5,000
