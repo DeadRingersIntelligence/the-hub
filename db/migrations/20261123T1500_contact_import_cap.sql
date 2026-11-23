@@ -3,6 +3,16 @@
 -- The Hub — a contact import is capped at what the database can commit well
 -- inside the statement timeout.
 --
+-- APPLIED 23 November (staging, then production 15:30:31), as reviewed:
+-- ledger md5 f56d7ccaa8775068ab08e24b68c7e68d, 31,202 characters. This note
+-- was added afterwards; the file is otherwise as it ran. All 7 lines of the
+-- verification passed on both, and line 3 decided against 1,500:
+--   staging (Nano)     preview 0.15 s, commit 2.04 s -> within a third
+--   production (Micro) preview 1.49 s, commit 3.48 s -> OVER A THIRD (43.5%),
+--                      with Disk IO Balance 99% and CPU 15%: a healthy reading
+-- SO THE CAP IS SUPERSEDED BY 20261123T1600 (1,000). This file's commit
+-- rework stays.
+--
 -- THE CAP IS 1,500 (Mandie, 23 November), from
 -- db/measurements/contact_import_timing_2000_*.sql run on PRODUCTION, from a
 -- quiet database, with section 3's commit swapped in:
