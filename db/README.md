@@ -861,6 +861,58 @@ Rules that are refused at write time rather than documented and hoped for:
 - Won revenue can never be imputed from an average
 - A benchmark needs at least three contributing organizations
 - Phone numbers normalize to E.164 on write, everywhere they appear
+- A phone record's contact is at the phone record's firm, for every role
+  (`20261123T1810`; see "Same-firm keys" below)
+
+### Same-firm keys: a row's parent is at the row's firm
+
+Most tables carry `organization_id`, and most foreign keys between them are
+single-column: `contact_id REFERENCES contacts (id)`. Nothing in such a key
+says the parent is at the same firm. Row-level security hid that from the
+app, but `postgres` and `service_role` bypass it, and 1630's import showed the
+consequence: a phone record of firm A on firm B's contact would have handed
+B's contact to A's import. Audited on both databases on 23 November: 140 keys
+have the shape, on 55 tables, and **zero rows point at another firm's
+row**. The 24 (production) and 31 (staging) rows the audit first showed all
+point at shared-library rows whose `organization_id` is NULL, by design.
+(`IS DISTINCT FROM` counts those as mismatches; count with `<>` on the
+family-A keys, where both sides are NOT NULL.)
+
+**Family A: 123 keys, both sides NOT NULL. A composite key, in batches.**
+`contact_phones -> contacts` went first (`20261123T1810`), as the one the
+import exposed. Every later batch follows it:
+1. a unique index on the target's `(id, organization_id)`;
+2. the single-column key **replaced, not joined**, by
+   `(x_id, organization_id) REFERENCES target (id, organization_id)`, in one
+   `ALTER TABLE`, keeping the constraint's name;
+3. **ON DELETE carried over exactly, and SET NULL needs a column list.** A
+   plain `ON DELETE SET NULL` on a composite key nulls every column,
+   `organization_id` included, which is NOT NULL, so a delete that used to
+   clear a pointer fails instead (`23502`). Write
+   `ON DELETE SET NULL (x_id)` (Postgres 15+). So compare `confdelsetcols`
+   as well as `confdeltype`; the type alone says "SET NULL" either way. 96
+   keys in this schema are SET NULL or SET DEFAULT, so this is most of the
+   job, not a corner of it;
+4. `ON UPDATE NO ACTION`, never CASCADE: a parent doesn't change firm, and
+   CASCADE would move its children quietly instead of refusing.
+Each batch's verification shows the refusal across firms, the same-firm
+write allowed, each delete behaviour as it was, and the catalogue's keys
+(columns, `confdeltype`, `confdelsetcols`, `confupdtype`). Predict `con` per
+batch: each batch adds an index and changes key definitions.
+
+**Family B: 10 keys whose targets hold shared rows (`tags`,
+`picklist_items`, `phone_numbers`). Not declarative, and not forced.** The
+rule there is "the parent's firm is NULL or mine". A composite key can't say
+that: with `MATCH SIMPLE`, a NULL in the referencing columns skips the check
+entirely, and the referencing row's `organization_id` is never NULL, so the
+key would demand an exact match and refuse every link to a shared row. No
+other declarative form compares a column to a value in another table. The
+options are a trigger (the honest exception, where no declarative form
+exists) or moving shared rows into their own table so both columns can be
+NOT NULL. Deferred behind family A.
+
+**Family C: 7 keys on 3 tables whose own `organization_id` is nullable.**
+What a NULL firm means on each must be decided before constraining it.
 
 ## Grants on a new table
 
