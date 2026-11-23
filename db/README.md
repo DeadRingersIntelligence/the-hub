@@ -769,6 +769,33 @@ as `position(msg in src) BETWEEN 1 AND position(first_update in src) - 1`,
 because `position()` returns 0 for absent text and a bare `<` passes for a
 message that has been renamed away.
 
+**The block is found by its delimiters, so no other line may look like them.**
+The verification block is the commented lines from one that is exactly
+`-- DO $$` to one that is exactly `-- END $$;`. Whoever runs it extracts it by
+those two lines, and the migration body is everything before the
+`-- Verification` banner. So in the header and the body, **no line may start
+with `-- DO $$`, `-- END $$;` or `-- Verification`**. Prose that does is read as
+a boundary. This happened twice: `20261120T2300` ("Verification lines 14 and 15
+show both") and `20261120T2330` ("Verification line 27 runs…"). Each time the
+body was cut at the header, so the test ran against a database without the
+migration. Write "Line 14 of the verification…" instead.
+
+**A line that may not be runnable everywhere must catch its own failure.** The
+report is the closing `RAISE`, so one line that errors loses every line before
+it. `20261120T2330`'s line 28 used
+`set_config('session_replication_role', …)`, which needs a superuser. Supabase's
+`postgres` isn't one, so on staging the whole block printed nothing. Wrap such a
+line in `BEGIN … EXCEPTION WHEN OTHERS` and print "not runnable here: <reason>".
+`ALTER TABLE … DISABLE TRIGGER` needs only table ownership for a user trigger,
+not superuser, which makes it the bypass to reach for. It blocks other writes to
+that table until the block rolls back.
+
+**Scratch is not staging.** The scratch database runs as a superuser on
+dedicated CPU. Superuser-only statements work there, and timings there were
+less than half of staging's: `20261120T2330`'s 5,000-row commit measured 3.6 s
+on scratch and 8.07 s on staging. Anything that depends on privilege or speed
+is measured on staging before it's promised.
+
 ### Re-running an applied migration
 
 A file whose body is idempotent should treat "already done" as a `NOTICE` and
