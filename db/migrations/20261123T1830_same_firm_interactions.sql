@@ -2,8 +2,9 @@
 -- 20261123T1830_same_firm_interactions.sql
 -- The Hub — same-firm keys, family A: interactions.
 --
--- 23 foreign keys from 21 tables onto 1 target (interactions) become composite on organization_id, so a row's
--- parent is at the row's firm for every role, postgres included.
+-- 23 foreign keys from 21 tables onto 1 target (interactions) become composite
+-- on organization_id, so a row's parent is at the row's firm for every role,
+-- postgres included.
 -- By ON DELETE: 16 CASCADE, 7 SET NULL. Batch 2 of 7 of family A (1810 was batch 1).
 --
 -- KEYS THAT ARE NOT THE COMMON CASE, carried over as they are:

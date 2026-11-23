@@ -2,8 +2,12 @@
 -- 20261123T1835_same_firm_the_rest.sql
 -- The Hub — same-firm keys, family A: the fifteen remaining targets.
 --
--- 20 foreign keys from 18 tables onto 15 targets (answering_services, auto_tag_rules, contact_imports, custom_field_definitions, decedents, evaluations, marketing_vendors, referral_sources, report_definitions, reporting_periods, rubrics, shops, teams, threads, transcript_segments) become composite on organization_id, so a row's
--- parent is at the row's firm for every role, postgres included.
+-- 20 foreign keys from 18 tables onto 15 targets (answering_services,
+-- auto_tag_rules, contact_imports, custom_field_definitions, decedents,
+-- evaluations, marketing_vendors, referral_sources, report_definitions,
+-- reporting_periods, rubrics, shops, teams, threads, transcript_segments)
+-- become composite on organization_id, so a row's parent is at the row's firm
+-- for every role, postgres included.
 -- By ON DELETE: 10 SET NULL, 8 CASCADE, 1 NO ACTION, 1 RESTRICT. Batch 7 of 7 of family A (1810 was batch 1).
 --
 -- KEYS THAT ARE NOT THE COMMON CASE, carried over as they are:

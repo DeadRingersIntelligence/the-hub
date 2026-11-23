@@ -2,7 +2,8 @@
 -- 20261123T1834_same_firm_accounts_cases_seats.sql
 -- The Hub — same-firm keys, family A: accounts, cases, seats, campaigns and location groups.
 --
--- 22 foreign keys from 18 tables onto 5 targets (accounts, cases, seats, campaigns, location_groups) become composite on organization_id, so a row's
+-- 22 foreign keys from 18 tables onto 5 targets (accounts, cases, seats,
+-- campaigns, location_groups) become composite on organization_id, so a row's
 -- parent is at the row's firm for every role, postgres included.
 -- By ON DELETE: 15 SET NULL, 7 CASCADE. Batch 6 of 7 of family A (1810 was batch 1).
 --

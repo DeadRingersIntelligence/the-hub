@@ -2,8 +2,9 @@
 -- 20261123T1832_same_firm_contacts.sql
 -- The Hub — same-firm keys, family A: contacts.
 --
--- 18 foreign keys from 15 tables onto 1 target (contacts) become composite on organization_id, so a row's
--- parent is at the row's firm for every role, postgres included.
+-- 18 foreign keys from 15 tables onto 1 target (contacts) become composite on
+-- organization_id, so a row's parent is at the row's firm for every role,
+-- postgres included.
 -- By ON DELETE: 11 CASCADE, 7 SET NULL. Batch 4 of 7 of family A (1810 was batch 1).
 --
 -- CONTACTS ALREADY HAS ITS INDEX. 20261123T1810 created

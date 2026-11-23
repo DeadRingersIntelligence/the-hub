@@ -2,8 +2,9 @@
 -- 20261123T1831_same_firm_people.sql
 -- The Hub — same-firm keys, family A: people.
 --
--- 22 foreign keys from 20 tables onto 1 target (people) become composite on organization_id, so a row's
--- parent is at the row's firm for every role, postgres included.
+-- 22 foreign keys from 20 tables onto 1 target (people) become composite on
+-- organization_id, so a row's parent is at the row's firm for every role,
+-- postgres included.
 -- By ON DELETE: 16 SET NULL, 6 CASCADE. Batch 3 of 7 of family A (1810 was batch 1).
 --
 -- KEYS THAT ARE NOT THE COMMON CASE, carried over as they are:

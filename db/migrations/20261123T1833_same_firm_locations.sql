@@ -2,8 +2,9 @@
 -- 20261123T1833_same_firm_locations.sql
 -- The Hub — same-firm keys, family A: locations.
 --
--- 16 foreign keys from 16 tables onto 1 target (locations) become composite on organization_id, so a row's
--- parent is at the row's firm for every role, postgres included.
+-- 16 foreign keys from 16 tables onto 1 target (locations) become composite on
+-- organization_id, so a row's parent is at the row's firm for every role,
+-- postgres included.
 -- By ON DELETE: 10 SET NULL, 5 CASCADE, 1 RESTRICT. Batch 5 of 7 of family A (1810 was batch 1).
 --
 -- KEYS THAT ARE NOT THE COMMON CASE, carried over as they are:
