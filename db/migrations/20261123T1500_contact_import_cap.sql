@@ -277,7 +277,13 @@ BEGIN
   -- misjudged the number of calls and scanned change_history once per call
   -- (5.6 s of a 6.2 s commit into a 10,000-contact book), a cost that grows
   -- with every firm's history (20261123T1500).
-  -- 1. the candidates: calls from these numbers with no contact at all
+  -- 1. the candidates: calls from these numbers with no contact at all.
+  --    THE TWO array_agg CALLS MUST STAY IN THE SAME ORDER: step 3 unnests
+  --    them side by side, so the Nth call is linked to the Nth contact. Both
+  --    are fed by this one scan, so they line up. An ORDER BY on one and not
+  --    the other, or splitting this into two queries, would link every call
+  --    to the wrong person with no error, and the history rows would record
+  --    the wrong answer as fact (review of #65).
   EXECUTE $q$
     WITH owned AS (
       SELECT DISTINCT ON (e164) cid, e164 FROM unnest($2::uuid[], $3::text[]) AS t(cid, e164) ORDER BY e164, cid)
