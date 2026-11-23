@@ -335,7 +335,17 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261120T2330`, `20261123T1500` and `20261123T1600`
+**Last moved by `20261123T1630`**, Dead Ringers' internal contact import, run
+on both databases on 23 November and identical on both afterwards. All nine
+matched the predicted table. `acl` +294: five new functions only `postgres`
+may execute, less `authenticated`'s EXECUTE on the four app-path import
+functions it closed. `com` +362: the five new functions' comments, with two
+replaced (a replaced comment moves the md5, not the length). `fn` +488: five
+new functions, `commit_contact_import`'s body (now a wrapper), and
+`plan_cache_mode=force_custom_plan` in `contact_import_apply`'s `proconfig`.
+The other six held.
+
+**Before that, by `20261120T2330`, `20261123T1500` and `20261123T1600`
 together**, the contact import and its two follow-ups, all run on both
 databases on 23 November, with the nine checked once after the third and
 identical on both. Every length matched the prediction made before the runs.
@@ -439,12 +449,12 @@ md5 and length.
 
 | query | md5 | characters |
 |---|---|---|
-| `acl` | `9638770d04c225f85e859a5700dfee9d` | 46674 |
+| `acl` | `cde1d6c1023b99fcc74ae7e6d4f01361` | 46968 |
 | `col` | `3e5d0c0753a1d494433f7924e2e60d5c` | 78700 |
-| `com` | `e226e1f3d941ccc54671d4bc9ddc7b52` | 12884 |
+| `com` | `70db5e4bbd828c13b6af517bd96f6623` | 13246 |
 | `con` | `6647ecc45df510c096abd9d31a2104bc` | 51604 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `218fc27fc2f97b4341160121ee11212e` | 14564 |
+| `fn` | `6409a33ff477a1f40237f60d80b09d36` | 15052 |
 | `mig` | `703a63ebb51590eed6688ffa916e7b82` | 17965 |
 | `trg` | `d95c17a65fc0670b4f4223cc21a76cb8` | 7183 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
