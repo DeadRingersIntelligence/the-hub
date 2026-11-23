@@ -1683,18 +1683,26 @@ baseline matched at every checkpoint. The app then failed on its first page:
 schema cache"*. PostgREST works out an embed from the foreign keys, and it
 accepts a column name as a hint (`contacts!contact_id`) only while the key is
 a single column (`findRel` in its `Plan.hs`); the files had made them
-`(contact_id, organization_id)`. Production was rolled back; staging kept the
-six to diagnose. `20261123T1810` had already done the same to
-`contact_phones!contact_id` on production, unnoticed, because nothing loaded
-the pages that use it.
+`(contact_id, organization_id)`. `20261123T1810` had already done the same
+to `contact_phones!contact_id`: from 18:13, when it ran, the Contacts page on
+production showed *"Could not find a relationship between 'contacts' and
+'contact_phones'"*, for about two hours, because nobody loaded it after the
+run. Production was rolled back, all seven files; staging kept them, to
+diagnose.
+
+**Changing a key's shape is an API change.** PostgREST builds the app's joins
+from the foreign keys, so a key's columns are part of what the app calls,
+whatever the catalogue says about the key itself.
 
 So the pattern gains two steps, and a schema change isn't done without both:
 1. **Before writing it, read what the app does with what it changes.** Search
    hellophone for every table, column and constraint the file touches:
    `.from('…')`, embeds (`table(…)` and `table!hint(…)`), `.rpc('…')`, and any
    error code the app matches on. List the pages that use them in the PR.
-   Embed hints name the constraint, never a column (hellophone's lint rule
-   refuses a column hint), so a key can change shape without breaking them.
+   Embed hints name the constraint, never a column, so a key can change
+   shape without breaking them (hellophone#27 converts the app's hints and
+   adds a lint rule that refuses a column hint; until it merges, check the
+   hints by hand).
 2. **After applying on staging, load the app against staging and exercise
    those pages** before production runs, and again on production after. A
    Vercel preview of hellophone reads staging. The PR says which pages were
