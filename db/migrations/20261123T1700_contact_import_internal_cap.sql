@@ -2,6 +2,13 @@
 -- 20261123T1700_contact_import_internal_cap.sql
 -- The Hub — Dead Ringers' contact import is capped at 10,000 rows.
 --
+-- APPLIED 23 November, as reviewed (commit cfc6f85, checked by sha256
+-- before pasting): ledger ran_md5 cd2fa6b5ec82ff9feb921f223204b08d, 9,588
+-- characters, staging 17:46:14 and production 17:46:57 UTC. This note was
+-- added afterwards; the file is otherwise as it ran. All 4 lines of the
+-- verification passed on both, identically; the nine matched the prediction
+-- (com and fn md5s only).
+--
 -- WHY. 20261123T1630 proposed 20,000, predicted at 16-18 s on production,
 -- with its verification line 11 deciding against a 30 s target (a quarter of
 -- the SQL editor's two-minute gateway). Measured, from a quiet database:

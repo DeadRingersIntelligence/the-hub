@@ -335,7 +335,12 @@ All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261123T1630`**, Dead Ringers' internal contact import, run
+**Last moved by `20261123T1700`**, the internal import's cap down to
+10,000, run on both databases on 23 November and identical on both
+afterwards. As predicted, only the md5s of `com` and `fn` moved (two comments
+and one body replaced) and no length did.
+
+**Before that, by `20261123T1630`**, Dead Ringers' internal contact import, run
 on both databases on 23 November and identical on both afterwards. All nine
 matched the predicted table. `acl` +294: five new functions only `postgres`
 may execute, less `authenticated`'s EXECUTE on the four app-path import
@@ -451,10 +456,10 @@ md5 and length.
 |---|---|---|
 | `acl` | `cde1d6c1023b99fcc74ae7e6d4f01361` | 46968 |
 | `col` | `3e5d0c0753a1d494433f7924e2e60d5c` | 78700 |
-| `com` | `70db5e4bbd828c13b6af517bd96f6623` | 13246 |
+| `com` | `9d44258c815925425bfdfc2476748d91` | 13246 |
 | `con` | `6647ecc45df510c096abd9d31a2104bc` | 51604 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `6409a33ff477a1f40237f60d80b09d36` | 15052 |
+| `fn` | `b6e05653c8370bb2b66ab24a8cd32510` | 15052 |
 | `mig` | `703a63ebb51590eed6688ffa916e7b82` | 17965 |
 | `trg` | `d95c17a65fc0670b4f4223cc21a76cb8` | 7183 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
