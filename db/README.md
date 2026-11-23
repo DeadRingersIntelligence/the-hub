@@ -342,8 +342,9 @@ as it was after `20261123T1700`. **Staging still has all seven**, kept to
 diagnose, and reads `com` 14655, `con` 53170. The table below is
 **production's**: the rows after `T1700`, which the rollback restores exactly
 (every key to its pinned single-column text, every new index and its comment
-dropped). PREDICTED, not yet measured after the rollback: replace this
-sentence with the measured nine.
+dropped). Measured on production after the rollback, 23 November: all nine
+exactly the rows after `T1700`, `com` `9d44258c…` and `con` `6647ecc4…`
+included, bit for bit. The rollbacks are proven clean, not believed clean.
 
 **Moved, then restored on production, by `20261123T1810`**, the first same-firm keys
 (`contact_phones -> contacts`), run on both databases on 23 November and
