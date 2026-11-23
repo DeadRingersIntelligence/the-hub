@@ -3,6 +3,22 @@
 -- The Hub — a phone record's contact is at the phone record's firm, by the
 -- schema, not only by the importer.
 --
+-- ROLLED BACK ON PRODUCTION, 23 November, evening (Mandie). It broke the
+-- app: the Contacts page failed with "Could not find a relationship between
+-- 'contacts' and 'contact_phones' in the schema cache" from 18:13, when it
+-- ran, until the rollback. PostgREST accepts a column as an embed hint
+-- (contact_phones!contact_id) only for a single-column key, and this file
+-- made the key (contact_id, organization_id). Nothing caught it: the
+-- verification read the catalogue, and nobody loaded the Contacts page.
+-- On production both keys are restored to their exact single-column text,
+-- contacts_id_organization_uq is dropped, and the ledger row is removed: the
+-- schema is as it was before this file. STAGING STILL HAS IT (with
+-- 20261123T1830 to T1835), kept to diagnose. It goes back on only after
+-- hellophone names every embed by its constraint
+-- (DeadRingersIntelligence/hellophone#27), tested against both schemas, and
+-- with the app loaded after the run (db/README.md, "A schema change is done
+-- when the app works"). The SQL below is unchanged.
+--
 -- APPLIED 23 November, as reviewed (commit 9ec187e, checked by sha256
 -- before pasting): ledger ran_md5 42cfaf2f3175f84284059f0636521f51, 15,903
 -- characters, staging 18:12:37 and production 18:13:26 UTC. This note was
