@@ -2,6 +2,34 @@
 -- 20261123T1600_contact_import_cap_1000.sql
 -- The Hub — a contact import is capped at 1,000 rows.
 --
+-- APPLIED 23 November, as reviewed: ledger md5
+-- 07dad16229de65aab986c0360d510cea, 11,266 characters, on staging (about
+-- 15:40) and production (15:41:48 UTC). This note, and the correction to
+-- line 3's expectation text in the verification, were added afterwards; the
+-- file is otherwise as it ran. Lines 1, 2 and 4 passed on both. Line 3, with
+-- the first-day fixture (850 created, 75 filled, 300 calls linked on each):
+--   staging (Nano)     preview 0.12 s, commit 1.51 s -> within a third
+--   production (Micro) preview 1.45 s, commit 2.96 s -> OVER A THIRD (37%)
+--
+-- WHY THE CAP STAYED AT 1,000 ANYWAY. By the rule below, OVER A THIRD meant
+-- dropping again. It didn't, deliberately (Mandie, 23 November). Two
+-- production measurements with comparable fixtures, 1,000 rows in 2.96 s
+-- and 2,000 in 3.85 s (db/measurements/contact_import_timing_2000_small.sql),
+-- give about 0.89 ms per row and about 2.07 s of FIXED cost, whatever the
+-- file's size. A third of the 8 s timeout is 2.67 s, so the fixed cost alone
+-- is 26% of the budget, and no cap in any useful range reaches the target:
+-- even a one-row file would sit at about 26%. Halving the cap again would buy
+-- about 15% for half the capacity. The one-third rule was set before that was
+-- known and can't be met by capping, so it was abandoned deliberately, not
+-- met. 1,000 leaves 2.7x headroom against the timeout on the binding case,
+-- measured on the slower of the two databases with its IO balance at 99%,
+-- and the failure mode is a clean, atomic rollback.
+--
+-- SUPERSEDED IN PURPOSE THE SAME DAY: contact import became internal-only,
+-- run as SQL by Dead Ringers, so the cap no longer governs onboarding. It
+-- stays as the record of what is safe through authenticated if import is
+-- ever exposed to clients.
+--
 -- WHY. 20261123T1500 set the cap at 1,500 and timed a file at the cap on
 -- both databases (its verification, line 3), from a quiet database:
 --   staging (Nano)     preview 0.15 s, commit 2.04 s -> within a third
@@ -173,8 +201,9 @@ COMMIT;
 --          || ', calls linked ' || (cm ->> 'calls_linked') || '; statement_timeout ' || COALESCE(tmo, 'not set')
 --          || CASE WHEN tmo_s IS NULL THEN '' WHEN t_cm <= tmo_s / 3 THEN ', commit within a third of it'
 --                  ELSE ', COMMIT OVER A THIRD OF IT' END
---          || chr(10) || '   (expect created 850, filled 75, calls linked 300, and "commit within a third of it" ON PRODUCTION,'
---          || ' which decides)' || chr(10);
+--          || chr(10) || '   (expect created 850, filled 75, calls linked 300. On production (Micro) this read 2.96 s,'
+--          || ' OVER A THIRD, and was ACCEPTED: about 2.07 s of the commit is fixed cost, so no cap reaches a'
+--          || ' third; see the APPLIED note at the top of the file. Not a failure unless it nears 8 s.)' || chr(10);
 --
 --   -- ---- 4. the commit is 1500's, untouched --------------------------------
 --   r := r || '4. commit_contact_import''s body: '
