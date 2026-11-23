@@ -329,13 +329,28 @@ case_need_type` made a `Y case_need_type` key appear, the count went 147 → 148
 and the rollback returned it to `968257c6…`. So `Y = 0` means no type carries
 a comment, not that the query cannot see one.
 
-### The baseline, 20 November 2026
+### The baseline, 23 November 2026
 
 All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**Last moved by `20261120T2300`**, run on both databases on 20 November and
+**Last moved by `20261120T2330`, `20261123T1500` and `20261123T1600`
+together**, the contact import and its two follow-ups, all run on both
+databases on 23 November, with the nine checked once after the third and
+identical on both. Every length matched the prediction made before the runs.
+2330 moved the lengths: `acl` +581, `col` +891, `com` +465, `con` +375,
+`fn` +372, `mig` +222 and `trg` +99, for the `contact_imports` table, its
+policies and grants, `contacts.import_id`, the new trigger and the four new
+functions. `defacl` and `typ` held. On production `acl` carries 18 more
+characters than scratch predicts, for `MAINTAIN` on the new table (Postgres
+17). 1500 (the commit's body, the cap, a comment) and 1600 (the cap again)
+replaced bodies and comments only, so they moved the md5s of `fn` and `com`
+and no length: **a changed body moves a row's md5 alone**, again. Checked once
+at the end, by ruling: running the nine between files would have measured
+states neither database kept.
+
+**Before that, by `20261120T2300`**, run on both databases on 20 November and
 identical on both afterwards. All nine matched the predicted table: `acl` (−148),
 `com` (+248), `fn` (+18) and `mig` (+24) moved, and the other five held. Review
 derived three from first principles before the run:
@@ -424,14 +439,14 @@ md5 and length.
 
 | query | md5 | characters |
 |---|---|---|
-| `acl` | `f9804fca07a295a7e0b8d73ffc6f4450` | 46093 |
-| `col` | `01d89a8b21f8c57bd5232fee77209467` | 77809 |
-| `com` | `ca65ff7809ad64098bca1efea22f16ec` | 12419 |
-| `con` | `a0f9680beb1354c63e09bee1b0cd175d` | 51229 |
+| `acl` | `9638770d04c225f85e859a5700dfee9d` | 46674 |
+| `col` | `3e5d0c0753a1d494433f7924e2e60d5c` | 78700 |
+| `com` | `e226e1f3d941ccc54671d4bc9ddc7b52` | 12884 |
+| `con` | `6647ecc45df510c096abd9d31a2104bc` | 51604 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `6110e9eee72116c9ec40dc6e2a5f9b0d` | 14192 |
-| `mig` | `8960a2368bcb39a1f292a193a4271874` | 17743 |
-| `trg` | `016fee0defb25d359e0aabeba8f93c8e` | 7084 |
+| `fn` | `218fc27fc2f97b4341160121ee11212e` | 14564 |
+| `mig` | `703a63ebb51590eed6688ffa916e7b82` | 17965 |
+| `trg` | `d95c17a65fc0670b4f4223cc21a76cb8` | 7183 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
 
 **A migration applied to both databases moves the baseline, and the migration
@@ -768,6 +783,33 @@ snapshot reads equal for the same reason. Read `prosrc` instead — and write it
 as `position(msg in src) BETWEEN 1 AND position(first_update in src) - 1`,
 because `position()` returns 0 for absent text and a bare `<` passes for a
 message that has been renamed away.
+
+**The block is found by its delimiters, so no other line may look like them.**
+The verification block is the commented lines from one that is exactly
+`-- DO $$` to one that is exactly `-- END $$;`. Whoever runs it extracts it by
+those two lines, and the migration body is everything before the
+`-- Verification` banner. So in the header and the body, **no line may start
+with `-- DO $$`, `-- END $$;` or `-- Verification`**. Prose that does is read as
+a boundary. This happened twice: `20261120T2300` ("Verification lines 14 and 15
+show both") and `20261120T2330` ("Verification line 27 runs…"). Each time the
+body was cut at the header, so the test ran against a database without the
+migration. Write "Line 14 of the verification…" instead.
+
+**A line that may not be runnable everywhere must catch its own failure.** The
+report is the closing `RAISE`, so one line that errors loses every line before
+it. `20261120T2330`'s line 28 used
+`set_config('session_replication_role', …)`, which needs a superuser. Supabase's
+`postgres` isn't one, so on staging the whole block printed nothing. Wrap such a
+line in `BEGIN … EXCEPTION WHEN OTHERS` and print "not runnable here: <reason>".
+`ALTER TABLE … DISABLE TRIGGER` needs only table ownership for a user trigger,
+not superuser, which makes it the bypass to reach for. It blocks other writes to
+that table until the block rolls back.
+
+**Scratch is not staging.** The scratch database runs as a superuser on
+dedicated CPU. Superuser-only statements work there, and timings there were
+less than half of staging's: `20261120T2330`'s 5,000-row commit measured 3.6 s
+on scratch and 8.07 s on staging. Anything that depends on privilege or speed
+is measured on staging before it's promised.
 
 ### Re-running an applied migration
 
