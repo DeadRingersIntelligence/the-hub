@@ -508,12 +508,12 @@ md5 and length.
 | `mig` | `703a63ebb51590eed6688ffa916e7b82` | 17965 |
 | `trg` | `d95c17a65fc0670b4f4223cc21a76cb8` | 7183 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
-| `colacl` | `77d1fee617dd5479944f8bbe49b64351` (predicted) | 47 (predicted) |
+| `colacl` | `77d1fee617dd5479944f8bbe49b64351` | 47 |
 
-**`colacl` is predicted, not yet measured** (24 November): it is the value of
-`notifications.read_at` alone, which is every column grant on scratch. Replace
-these two cells, and this sentence, with the measured values once it has run on
-both databases.
+**`colacl` measured on both databases, 24 November, identical, and as
+predicted:** the cell is `A notifications.read_at => authenticated:UPDATE`, the
+one column grant either database had. `20261124T1555` will add `cases`' eleven
+(predicted `bb6a7648…`, 652 characters).
 
 **A migration applied to both databases moves the baseline, and the migration
 that moved it updates this table in its own pull request.** Not later, and not
