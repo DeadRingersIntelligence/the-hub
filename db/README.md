@@ -1773,6 +1773,14 @@ changed relationship resolves (a contact's phone numbers, a call's handler,
 a case's arranging person) and check that it's there, on a row known to have
 one. "The page loaded" passes a broken embed.
 
+**A sweep has to load the pages, in a browser.** Fetching each page's HTML
+and scanning it for the expected names gives false signals both ways
+(24 November, sweeping for hellophone#27): Settings applies its `?tab=`
+client-side, so every tab's HTML was identical and read as "all the same";
+the case pages render client-side, so names that were there read as absent.
+Either would have passed or failed a page on what the server sent before the
+page ran, not on what a person sees.
+
 **A schema reload that doesn't fix it means it isn't the cache.** PostgREST
 caches the schema; `NOTIFY pgrst, 'reload schema';` refreshes it. If an embed
 fails after a schema change, reload once. If it still fails, the change itself
