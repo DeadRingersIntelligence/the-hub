@@ -1773,6 +1773,16 @@ changed relationship resolves (a contact's phone numbers, a call's handler,
 a case's arranging person) and check that it's there, on a row known to have
 one. "The page loaded" passes a broken embed.
 
+**No row to prove the join with is "nothing to exercise", never a pass.**
+A page with no data renders the same whether its joins work or not, so it
+proves nothing either way. Record it as nothing to exercise, and say where the
+join *was* proved, if anywhere. On 24 November hellophone#27 passed on
+production for every page with data, but production had no cases, so every
+case join there was covered only by staging's test: the first firm's first
+case is the first time those pages render real rows on production. Load one
+then. It is the 23rd's shape: a page that looks fine because it has nothing to
+render.
+
 **A sweep has to load the pages, in a browser.** Fetching each page's HTML
 and scanning it for the expected names gives false signals both ways
 (24 November, sweeping for hellophone#27): Settings applies its `?tab=`
