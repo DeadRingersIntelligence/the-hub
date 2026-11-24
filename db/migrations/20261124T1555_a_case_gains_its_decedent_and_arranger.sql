@@ -44,15 +44,30 @@
 -- with nobody subscribed writes none, and "once" would mean "once someone
 -- was listening".
 --
--- authenticated HOLDS TABLE-LEVEL UPDATE ON cases, so a new column is
--- writable by the app unless something says otherwise. A flag the app could
--- reset would re-send the notification, or suppress it. So a trigger refuses
--- any change to conversion_notified except from inside another trigger
--- (pg_trigger_depth() >= 2, which an API caller can't produce), and refuses
--- turning it back to false at all. The same grant means arranging_person_id
--- stays writable directly, past set_case_arranging_person's firm check; on
+-- authenticated HELD TABLE-LEVEL INSERT AND UPDATE ON cases, so any new
+-- column, this one included, was writable from the app. A trigger guarding one
+-- column is a denylist: a column added later and forgotten is silently
+-- writable. So, as 20261120T2300 did for notifications, the grant becomes an
+-- allowlist (Mandie): authenticated keeps INSERT and UPDATE only on the
+-- columns its own writers use. Every write to cases from the app goes through
+-- one of nine Hub functions that run as the caller (hellophone writes cases
+-- directly nowhere; searched), and their statements name:
+--   UPDATE  need_type, booked_service_date, served_on, status,
+--           status_item_id, converting_interaction_id, arranging_person_id,
+--           updated_at                            (8 of the table's 21)
+--   INSERT  organization_id, location_id, need_type,
+--           converting_interaction_id, opened_on, status  (create_case_for_call)
+-- conversion_notified is in neither, so nothing in the app can set it, by
+-- UPDATE or by INSERT. Section 1 pins all nine writers' bodies, because the
+-- list is read from them; a writer changed later to touch another column
+-- fails loudly (permission denied) rather than quietly. Line 8 of the
+-- verification calls every one of them as authenticated.
+-- NOT CLOSED: arranging_person_id stays in the list, because
+-- set_case_arranging_person and merge_people run as the caller and write it,
+-- so the app can still write it directly, past this file's firm check. On
 -- production, with its single-column key, nothing else stops another firm's
--- person being set. That is family A's to close, not this file's.
+-- person being set until family A is back on. Closing it here would mean
+-- making both functions SECURITY DEFINER; flagged, not done.
 --
 -- THE APP (db/README.md, "A schema change is done when the app works"):
 -- hellophone reads case_decedents and arranging_person_id (case page, contact
@@ -61,7 +76,8 @@
 -- conversion notification shows in the bell. The PR lists the pages.
 --
 -- Requires: 20261119T1900 (create_case_for_call, set_case_need_type,
---           decedent_status_for_need_type), 20261102T1600
+--           decedent_status_for_need_type), the nine writers of cases as
+--           pinned in section 1, 20261102T1600
 --           (case_converted_notify, as pinned), 20261103T1200.
 -- NOT SAFE TO RUN TWICE: section 1 refuses once the column exists.
 -- =============================================================================
@@ -83,12 +99,25 @@ BEGIN
       ('create_case_for_call(uuid, case_need_type, decedent_status, text, text, date, uuid, text, uuid[])', 'a7fe724b27a640ae91d0f58a15c5f82d'),
       ('set_case_need_type(uuid, case_need_type, uuid, date)', '4497b842eed7c61e49ba15c482b3a856'),
       ('record_change(uuid, history_entity, uuid, history_action, actor_kind, text, text, uuid, jsonb, link_method)',
-       '130654ec3b66364423609c08b9fffdd5') LOOP
+       '130654ec3b66364423609c08b9fffdd5'),
+      -- the writers of cases that run as the caller: the column lists in
+      -- section 2 are read from these bodies
+      ('clear_call_case(uuid)', '9e68c53fb55cfd35f90d55a2c1ef404b'),
+      ('set_call_case(uuid, uuid)', '084dd46f3f9d921bc30535183a7984e3'),
+      ('set_case_booked_date(uuid, date, text)', 'd5e58c56a838ae97b71ecea487023ad2'),
+      ('set_case_served(uuid, date, text)', '3e4d9dc05d9ed33d4f9cbea1b1962f5c'),
+      ('set_case_status(uuid, uuid, text)', 'd15039ba9789ae96bdd3841eaf02133c'),
+      ('set_case_lost(uuid, boolean, text)', 'f2d2191da56c84bd09cfdb6898731910'),
+      ('merge_people(uuid, uuid, text)', '91c26de0d70bc1da6a5bd6edb791484b'),
+      ('delete_case(uuid)', '8475f92cd2e0b65959621dfd9d0a46a2') LOOP
     IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure(f)) IS DISTINCT FROM v THEN
       RAISE EXCEPTION '% is not the body this file was reviewed against (md5 %): stop and read it',
         f, COALESCE((SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure(f)), 'missing');
     END IF;
   END LOOP;
+  IF NOT has_table_privilege('authenticated', 'cases', 'UPDATE') OR NOT has_table_privilege('authenticated', 'cases', 'INSERT') THEN
+    RAISE EXCEPTION 'authenticated no longer holds INSERT and UPDATE on cases as this file expects: stop and read the grants';
+  END IF;
   IF to_regprocedure('hand_link_actor()') IS NULL THEN
     RAISE EXCEPTION 'hand_link_actor() is missing';
   END IF;
@@ -105,9 +134,10 @@ ALTER TABLE cases ADD COLUMN conversion_notified boolean NOT NULL DEFAULT false;
 COMMENT ON COLUMN cases.conversion_notified IS
   'The case has had a decedent, so its conversion notification has been sent '
   '(or was due: a firm with nobody subscribed is told no one). Set once by '
-  'case_converted_notify, never cleared, never set by hand '
-  '(cases_conversion_notified_guard). It keeps the notification to once per '
-  'case when decedents are removed and added (20261124T1555).';
+  'case_converted_notify; no API role may write it (authenticated holds '
+  'INSERT and UPDATE on cases by column, and not on this one). It keeps the '
+  'notification to once per case when decedents are removed and added '
+  '(20261124T1555).';
 
 -- Every case with a decedent now has converted. cases_touch is held off for
 -- the backfill, so no case's updated_at moves for a column it didn't have.
@@ -116,24 +146,14 @@ UPDATE cases c SET conversion_notified = true
  WHERE EXISTS (SELECT 1 FROM case_decedents cd WHERE cd.case_id = c.id);
 ALTER TABLE cases ENABLE TRIGGER cases_touch;
 
-CREATE FUNCTION cases_conversion_notified_guard() RETURNS trigger
-LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
-BEGIN
-  IF TG_OP = 'UPDATE' AND OLD.conversion_notified AND NOT NEW.conversion_notified THEN
-    RAISE EXCEPTION 'a case that has converted stays converted: conversion_notified is never cleared';
-  END IF;
-  -- Depth 1 is this trigger fired by a statement someone ran; 2 or more is
-  -- this trigger fired by a statement another trigger ran (case_converted_notify).
-  IF pg_trigger_depth() < 2
-     AND NEW.conversion_notified IS DISTINCT FROM (CASE WHEN TG_OP = 'UPDATE' THEN OLD.conversion_notified ELSE false END) THEN
-    RAISE EXCEPTION 'conversion_notified is set by the Hub when a case gets its first decedent, not by hand';
-  END IF;
-  RETURN NEW;
-END $$;
-CREATE TRIGGER cases_conversion_notified_guard_t
-  BEFORE INSERT OR UPDATE OF conversion_notified ON cases
-  FOR EACH ROW EXECUTE FUNCTION cases_conversion_notified_guard();
-REVOKE ALL ON FUNCTION cases_conversion_notified_guard() FROM PUBLIC, anon, authenticated, service_role;
+-- The grant becomes an allowlist (see the header): every column the app's
+-- writers use, and nothing else. SELECT and DELETE are unchanged.
+REVOKE INSERT, UPDATE ON cases FROM authenticated;
+GRANT UPDATE (need_type, booked_service_date, served_on, status, status_item_id,
+              converting_interaction_id, arranging_person_id, updated_at)
+  ON cases TO authenticated;
+GRANT INSERT (organization_id, location_id, need_type, converting_interaction_id, opened_on, status)
+  ON cases TO authenticated;
 
 -- -----------------------------------------------------------------------------
 -- 3. The notification, once per case (the body otherwise as installed)
@@ -380,7 +400,9 @@ BEGIN
     NULL,
     'add_case_decedent, remove_case_decedent and set_case_arranging_person, with '
     'the firm, merge and need-type checks create_case_for_call makes; the '
-    'conversion notification once per case (cases.conversion_notified, guarded).');
+    'conversion notification once per case (cases.conversion_notified); '
+    'authenticated''s INSERT and UPDATE on cases narrowed to the columns its '
+    'writers use.');
 END $rec$;
 
 COMMIT;
@@ -396,6 +418,8 @@ COMMIT;
 --   r text := ''; res text; n int; v_a uuid; v_b uuid; u_mo uuid; u_ola uuid; a_mo uuid := gen_random_uuid(); a_ola uuid := gen_random_uuid();
 --   d_james uuid; d_liv uuid; d_liv2 uuid; d_bill uuid; d_new uuid; x uuid;
 --   p_pat uuid; p_ina uuid; p_bea uuid; k_at uuid; k_pre uuid; k_none uuid; k_none2 uuid;
+--   u_dr uuid; a_dr uuid := gen_random_uuid(); c_fam uuid; i_one uuid; i_two uuid; k_w uuid; k_new uuid; k_bare uuid;
+--   p_dup uuid; st_hold uuid; ok text;
 -- BEGIN
 --   PERFORM set_config('app.is_internal', 'on', true);
 --   INSERT INTO organizations (name, client_type) VALUES ('ZZZ verify cases A', 'funeral_home') RETURNING id INTO v_a;
@@ -416,6 +440,20 @@ COMMIT;
 --   INSERT INTO cases (organization_id, need_type) VALUES (v_a, 'pre_need') RETURNING id INTO k_pre;
 --   INSERT INTO cases (organization_id, need_type) VALUES (v_a, 'at_need') RETURNING id INTO k_none;
 --   INSERT INTO cases (organization_id, need_type) VALUES (v_a, 'at_need') RETURNING id INTO k_none2;
+--   -- for line 8: a Dead Ringers user (merge_people is theirs), a family
+--   -- contact with two calls, a case to work on, a bare case to delete, and a
+--   -- duplicate of Pat arranging it
+--   INSERT INTO users (email, full_name, auth_user_id, is_internal) VALUES ('zzz-dr@example.invalid', 'ZZZ DR', a_dr, true) RETURNING id INTO u_dr;
+--   INSERT INTO contacts (organization_id, full_name) VALUES (v_a, 'ZZZ Family') RETURNING id INTO c_fam;
+--   INSERT INTO interactions (organization_id, direction, occurred_at, last_activity_at, contact_id, contact_link_method)
+--   VALUES (v_a, 'inbound', now() - interval '2 days', now() - interval '2 days', c_fam, 'confirmed') RETURNING id INTO i_one;
+--   INSERT INTO interactions (organization_id, direction, occurred_at, last_activity_at, contact_id, contact_link_method)
+--   VALUES (v_a, 'inbound', now() - interval '1 day', now() - interval '1 day', c_fam, 'confirmed') RETURNING id INTO i_two;
+--   INSERT INTO cases (organization_id, need_type) VALUES (v_a, 'at_need') RETURNING id INTO k_w;
+--   INSERT INTO cases (organization_id, need_type) VALUES (v_a, 'pre_need') RETURNING id INTO k_bare;
+--   INSERT INTO people (organization_id, full_name, status) VALUES (v_a, 'ZZZ Pat (dup)', 'active') RETURNING id INTO p_dup;
+--   UPDATE cases SET arranging_person_id = p_dup WHERE id = k_w;
+--   SELECT id INTO st_hold FROM picklist_items WHERE organization_id = v_a AND picklist = 'case_status' AND case_outcome = 'on_hold' LIMIT 1;
 --   PERFORM set_config('app.is_internal', 'off', true);
 --   PERFORM set_config('request.jwt.claims', json_build_object('sub', a_mo::text)::text, true);
 --   PERFORM set_config('role', 'authenticated', true);
@@ -498,24 +536,24 @@ COMMIT;
 --          || chr(10) || '   (expect true, "ZZZ Mo set ZZZ Pat as arranging the case"; inactive Ina: refused | firm B''s Bea: '
 --          || '"choose someone active at this firm"; true; true)' || chr(10);
 --
---   -- ---- 6. nobody sets conversion_notified by hand ---------------------------
---   -- k_none and k_none2 have never had a decedent: not converted.
+--   -- ---- 6. nobody in the app writes what its writers don't ----------------
+--   -- authenticated holds INSERT and UPDATE on cases by column now; the
+--   -- Hub's trigger, running as its owner, still sets the flag.
 --   res := '';
---   BEGIN UPDATE cases SET conversion_notified = false WHERE id = k_at; res := res || 'cleared as Mo: ALLOWED | ';
---   EXCEPTION WHEN OTHERS THEN res := res || 'cleared as Mo: refused | '; END;
---   BEGIN UPDATE cases SET conversion_notified = true WHERE id = k_none; res := res || 'set as Mo: ' || CASE WHEN FOUND THEN 'ALLOWED' ELSE 'NO ROW' END || ' | ';
---   EXCEPTION WHEN OTHERS THEN res := res || 'set as Mo: refused | '; END;
---   BEGIN INSERT INTO cases (organization_id, need_type, conversion_notified) VALUES (v_a, 'at_need', true); res := res || 'a new case born converted, as Mo: ALLOWED | ';
---   EXCEPTION WHEN OTHERS THEN res := res || 'a new case born converted, as Mo: refused | '; END;
---   PERFORM set_config('role', 'none', true);
---   BEGIN UPDATE cases SET conversion_notified = true WHERE id = k_none2; res := res || 'set as postgres: ' || CASE WHEN FOUND THEN 'ALLOWED' ELSE 'NO ROW' END;
---   EXCEPTION WHEN OTHERS THEN res := res || 'set as postgres: refused'; END;
---   r := r || '6. ' || res || '; and the Hub still sets it: k_none converts on its first decedent: ';
---   PERFORM set_config('role', 'authenticated', true);
+--   BEGIN UPDATE cases SET conversion_notified = false WHERE id = k_at; res := res || 'clear the flag: ALLOWED | ';
+--   EXCEPTION WHEN insufficient_privilege THEN res := res || 'clear the flag: 42501 | '; END;
+--   BEGIN UPDATE cases SET conversion_notified = true WHERE id = k_none; res := res || 'set the flag: ALLOWED | ';
+--   EXCEPTION WHEN insufficient_privilege THEN res := res || 'set the flag: 42501 | '; END;
+--   BEGIN INSERT INTO cases (organization_id, need_type, conversion_notified) VALUES (v_a, 'at_need', true); res := res || 'a case born converted: ALLOWED | ';
+--   EXCEPTION WHEN insufficient_privilege THEN res := res || 'a case born converted: 42501 | '; END;
+--   BEGIN UPDATE cases SET organization_id = v_b WHERE id = k_none; res := res || 'move a case to another firm: ALLOWED | ';
+--   EXCEPTION WHEN insufficient_privilege THEN res := res || 'move a case to another firm: 42501 | '; END;
+--   BEGIN UPDATE cases SET sale_value = 1 WHERE id = k_none; res := res || 'set sale_value: ALLOWED';
+--   EXCEPTION WHEN insufficient_privilege THEN res := res || 'set sale_value: 42501'; END;
+--   r := r || '6. as Mo, directly: ' || res || '; and the Hub still sets the flag: k_none converts on its first decedent: ';
 --   PERFORM add_case_decedent(k_none, NULL, 'Ellis', 'Ruth');
 --   r := r || (SELECT conversion_notified FROM cases WHERE id = k_none)
---          || chr(10) || '   (expect cleared as Mo: refused | set as Mo: refused | a new case born converted, as Mo: refused | '
---          || 'set as postgres: refused; true)' || chr(10);
+--          || chr(10) || '   (expect 42501 for all five; true)' || chr(10);
 --
 --   -- ---- 7. who may call them -----------------------------------------------
 --   r := r || '7. anon may run them: '
@@ -525,6 +563,40 @@ COMMIT;
 --          || (SELECT count(*) FILTER (WHERE has_function_privilege('authenticated', f, 'EXECUTE')) FROM unnest(ARRAY[
 --               'add_case_decedent(uuid, uuid, text, text, date)', 'remove_case_decedent(uuid, uuid)', 'set_case_arranging_person(uuid, uuid)']) f)
 --          || ' of 3   (expect 0 of 3; 3 of 3)' || chr(10);
+--
+--   -- ---- 8. every writer of cases still works, as the people who call it ----
+--   -- The grant is read from their bodies (section 1 pins them); this shows
+--   -- none of them lost a column it needs. As Mo, unless said.
+--   res := '';
+--   FOR ok IN SELECT unnest(ARRAY['set_case_need_type', 'set_case_booked_date', 'set_case_served', 'set_case_status',
+--                                 'set_case_lost', 'create_case_for_call', 'set_call_case', 'clear_call_case',
+--                                 'set_case_arranging_person', 'delete_case']) LOOP
+--     BEGIN
+--       CASE ok
+--         WHEN 'set_case_need_type'   THEN PERFORM set_case_need_type(k_w, 'imminent', NULL, NULL);
+--         WHEN 'set_case_booked_date' THEN PERFORM set_case_booked_date(k_w, current_date + 7, NULL);
+--         WHEN 'set_case_served'      THEN PERFORM set_case_served(k_w, current_date - 1, NULL);
+--         WHEN 'set_case_status'      THEN PERFORM set_case_status(k_w, st_hold, 'verifying 20261124T1555');
+--         WHEN 'set_case_lost'        THEN PERFORM set_case_lost(k_w, true, 'verifying 20261124T1555');
+--         WHEN 'create_case_for_call' THEN k_new := create_case_for_call(i_one, 'at_need', 'at_need', 'Family', 'Fay');
+--         WHEN 'set_call_case'        THEN PERFORM set_call_case(i_two, k_new);
+--         WHEN 'clear_call_case'      THEN PERFORM clear_call_case(i_two);
+--         WHEN 'set_case_arranging_person' THEN PERFORM set_case_arranging_person(k_new, p_pat);
+--         WHEN 'delete_case'          THEN PERFORM delete_case(k_bare);
+--       END CASE;
+--       res := res || ok || ' ok | ';
+--     EXCEPTION WHEN OTHERS THEN res := res || ok || ': ' || SQLSTATE || ' ' || SQLERRM || ' | ';
+--     END;
+--   END LOOP;
+--   -- merge_people is Dead Ringers': as the internal user
+--   PERFORM set_config('request.jwt.claims', json_build_object('sub', a_dr::text)::text, true);
+--   BEGIN PERFORM merge_people(p_pat, p_dup, 'verifying 20261124T1555');
+--     res := res || 'merge_people ok (k_w''s arranger now Pat: ' || ((SELECT arranging_person_id FROM cases WHERE id = k_w) = p_pat) || ')';
+--   EXCEPTION WHEN OTHERS THEN res := res || 'merge_people: ' || SQLSTATE || ' ' || SQLERRM; END;
+--   PERFORM set_config('request.jwt.claims', json_build_object('sub', a_mo::text)::text, true);
+--   r := r || '8. ' || res || chr(10)
+--          || '   (expect every one "ok", and merge_people ok (k_w''s arranger now Pat: true). A 42501 here is a column '
+--          || 'this file left out of the grant)' || chr(10);
 --
 --   RAISE EXCEPTION 'VERIFY 20261124T1555_a_case_gains_its_decedent_and_arranger (all rolled back) %', chr(10) || r;
 -- END $$;
