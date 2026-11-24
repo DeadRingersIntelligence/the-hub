@@ -92,7 +92,11 @@ CREATE TABLE schema_rollbacks (
   recorded_at            timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_rollbacks_precision_ck CHECK (applied_at_precision IN ('exact', 'second', 'unknown')),
   CONSTRAINT schema_rollbacks_recorded_how_ck CHECK (
-    (recorded_how = 'record_rollback' AND rolled_back_at IS NOT NULL AND applied_at_precision = 'exact')
+    -- precision says what applied_at holds, whoever wrote the row
+    (recorded_how = 'record_rollback'
+       AND rolled_back_at IS NOT NULL
+       AND ((applied_at IS NOT NULL AND applied_at_precision = 'exact')
+         OR (applied_at IS NULL     AND applied_at_precision = 'unknown')))
     OR (recorded_how = 'backfill' AND rolled_back_order IS NOT NULL))
 );
 CREATE INDEX schema_rollbacks_filename_idx ON schema_rollbacks (filename, id);
@@ -151,7 +155,10 @@ BEGIN
   INSERT INTO schema_rollbacks (filename, first_applied_at, applied_at, applied_at_precision, applied_by, sha256,
                                 ran_md5, ran_len, note, ledger_recorded_how,
                                 rolled_back_at, rolled_back_by, reason, recorded_how)
-  VALUES (m.filename, m.first_applied_at, m.applied_at, 'exact', m.applied_by, m.sha256,
+  -- derived, not asserted: some ledger rows have no applied_at (eleven on
+  -- production, entered afterwards from evidence)
+  VALUES (m.filename, m.first_applied_at, m.applied_at,
+          CASE WHEN m.applied_at IS NULL THEN 'unknown' ELSE 'exact' END, m.applied_by, m.sha256,
           m.ran_md5, m.ran_len, m.note, m.recorded_how,
           clock_timestamp(), current_user, p_reason, 'record_rollback');
   DELETE FROM schema_migrations WHERE filename = p_filename;
@@ -159,7 +166,8 @@ END $$;
 COMMENT ON FUNCTION record_rollback(text, text) IS
   'Roll a migration out of the ledger with its evidence: copies the '
   'schema_migrations row into schema_rollbacks with the time (clock_timestamp, '
-  'stamped here, not passed in), who and why, then deletes it. Call it inside '
+  'stamped here, not passed in), who and why, then deletes it. applied_at''s '
+  'precision is derived: exact, or unknown where the ledger row had none. Call it inside '
   'the rollback''s own transaction, once per file (20261123T2000).';
 REVOKE ALL ON FUNCTION record_rollback(text, text) FROM PUBLIC, anon, authenticated, service_role;
 
@@ -232,6 +240,26 @@ COMMIT;
 --   r := r || '4. as postgres: ' || res || '; the row still there: '
 --          || EXISTS (SELECT 1 FROM schema_rollbacks WHERE filename = 'zzz_verify_rollback.sql')
 --          || '   (expect update: refused | delete: refused | truncate: refused; true)' || chr(10);
+--
+--   -- ---- 5. a ledger row with no applied_at -------------------------------
+--   -- Eleven rows on production have none (entered afterwards from evidence:
+--   -- recorded_how = 'backfill', no ran_md5). Their rollback must say
+--   -- "unknown", not "exact".
+--   INSERT INTO schema_migrations (filename, applied_at, recorded_how, ran_md5, ran_len)
+--   VALUES ('zzz_no_applied_at.sql', NULL, 'backfill', NULL, NULL);
+--   PERFORM record_rollback('zzz_no_applied_at.sql', 'verifying 20261123T2000, no applied_at');
+--   r := r || '5. a ledger row without applied_at, rolled back: recorded as '
+--          || (SELECT COALESCE(applied_at::text, 'null') || '/' || applied_at_precision || ', ledger_recorded_how ' || ledger_recorded_how
+--                FROM schema_rollbacks WHERE filename = 'zzz_no_applied_at.sql');
+--   res := '';
+--   BEGIN INSERT INTO schema_rollbacks (filename, applied_at, applied_at_precision, rolled_back_at, rolled_back_by, reason, recorded_how)
+--         VALUES ('zzz_claims_exact.sql', NULL, 'exact', now(), 'x', 'x', 'record_rollback'); res := res || 'null time claimed exact: ALLOWED | ';
+--   EXCEPTION WHEN check_violation THEN res := res || 'null time claimed exact: refused | '; END;
+--   BEGIN INSERT INTO schema_rollbacks (filename, applied_at, applied_at_precision, rolled_back_at, rolled_back_by, reason, recorded_how)
+--         VALUES ('zzz_claims_unknown.sql', now(), 'unknown', now(), 'x', 'x', 'record_rollback'); res := res || 'a time claimed unknown: ALLOWED';
+--   EXCEPTION WHEN check_violation THEN res := res || 'a time claimed unknown: refused'; END;
+--   r := r || '; written by hand: ' || res
+--          || chr(10) || '   (expect null/unknown, ledger_recorded_how backfill; null time claimed exact: refused | a time claimed unknown: refused)' || chr(10);
 --
 --   RAISE EXCEPTION 'VERIFY 20261123T2000_a_rollback_keeps_its_evidence (all rolled back) %', chr(10) || r;
 -- END $$;
