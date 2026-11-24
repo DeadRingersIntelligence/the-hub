@@ -212,7 +212,10 @@ WHERE n.nspname = 'public'
 -- 4. Show the work, or do it
 --
 -- With neither flag set this raises and the whole transaction is discarded.
--- With both set to what it printed, it applies.
+-- With both set to the reviewed values in the header, it applies. The
+-- message's continued lines carry no E: in SQL, string literals continued over
+-- a newline join only when the continuations are plain '...', and the first
+-- segment's E applies to the whole (E'a\n' then E'b' is a syntax error).
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
@@ -231,18 +234,18 @@ BEGIN
 
   IF want_md5 IS NULL OR want_idx IS NULL THEN
     RAISE EXCEPTION E'DRY RUN — nothing applied.\n'
-      E'  keys to restore : %\n'
-      E'  definitions md5 : %\n'
-      E'                    the review says 472f5c2ab60c209c83b45bdb6a0fc775\n'
-      E'  indexes to drop : %\n'
-      E'                    the review says 24\n'
-      E'  index names     : %\n'
-      E'  files to record : %\n'
-      E'\n'
-      E'If both match the review, run again with the two SET lines from this\n'
-      E'file''s header at the top of the same paste. Do NOT copy the figures\n'
-      E'above into them: pinning what this run printed proves only that\n'
-      E'nothing changed between two runs of the same code.',
+      '  keys to restore : %\n'
+      '  definitions md5 : %\n'
+      '                    the review says 472f5c2ab60c209c83b45bdb6a0fc775\n'
+      '  indexes to drop : %\n'
+      '                    the review says 24\n'
+      '  index names     : %\n'
+      '  files to record : %\n'
+      '\n'
+      'If both match the review, run again with the two SET lines from this\n'
+      'file''s header at the top of the same paste. Do NOT copy the figures\n'
+      'above into them: pinning what this run printed proves only that\n'
+      'nothing changed between two runs of the same code.',
       n_keys, got_md5, n_idx,
       (SELECT string_agg(idxname, ', ' ORDER BY idxname) FROM _rb_idx),
       (SELECT string_agg(filename, ', ' ORDER BY filename) FROM schema_migrations
