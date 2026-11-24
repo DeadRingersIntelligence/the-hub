@@ -235,7 +235,7 @@ and `20261103T1000`.
 
 ## Comparing the two databases
 
-Nine queries. Run each on both databases and compare the two cells. Each
+Ten queries. Run each on both databases and compare the two cells. Each
 returns a single cell, with `' => '` between a name and its definition and
 `' ;; '` between entries, because the editor's result grid flattens newlines
 and tabs — so a diff is a text comparison rather than a row-by-row read.
@@ -328,6 +328,34 @@ block**. Measured on staging in a rolled-back block: `COMMENT ON TYPE
 case_need_type` made a `Y case_need_type` key appear, the count went 147 → 148,
 and the rollback returned it to `968257c6…`. So `Y = 0` means no type carries
 a comment, not that the query cannot see one.
+
+
+```sql
+-- colacl: column-level grants, which acl does not see
+SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT 'A ' || c.relname::text || '.' || a.attname::text AS k, string_agg((CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE g.grantee::regrole::text END) || ':' || g.privilege_type, ',' ORDER BY (CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE g.grantee::regrole::text END) || ':' || g.privilege_type) AS v FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace, aclexplode(a.attacl) g WHERE n.nspname = 'public' AND a.attnum > 0 AND NOT a.attisdropped GROUP BY c.relname, a.attname) x;
+```
+
+**`colacl` closes a gap `acl` had all along** (24 November). `acl` reads
+`relacl` and `proacl`, the grants on whole tables and functions. A grant on a
+single column (`GRANT UPDATE (read_at) ON notifications`) lives in
+`pg_attribute.attacl`, which nothing read. Two of this schema's rules are
+column grants: `20261120T2300`'s `notifications.read_at`, and
+`20261124T1555`'s allowlist on `cases`. Either could drift, a column granted or
+lost on one database, with every other query identical. That's the project's
+recurring defect in its purest form: a rule stated in one place with nothing
+keeping it in step (Mandie).
+
+**No `COALESCE` here, unlike `acl`, deliberately.** A table or function with
+no explicit grant has a default (`acldefault`), and leaving it out hides the
+most permissive objects. A column has no such default: a NULL `attacl` means
+no column grant, and `aclexplode(NULL)` dropping it is right. The grants
+themselves are the cell, not hashes: there are few, and a difference reads at
+a glance.
+
+**Proved it can see one** on scratch, before any database ran it: as it stands
+it returns `A notifications.read_at => authenticated:UPDATE` (47 characters),
+and with `20261124T1555` applied in a rolled-back transaction it adds the 11
+`cases` columns that file grants (652 characters).
 
 ### The baseline, 23 November 2026
 
@@ -491,11 +519,17 @@ md5 and length.
 | `mig` | `703a63ebb51590eed6688ffa916e7b82` | 17965 |
 | `trg` | `d95c17a65fc0670b4f4223cc21a76cb8` | 7183 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
+| `colacl` | `77d1fee617dd5479944f8bbe49b64351` | 47 |
+
+**`colacl` measured on both databases, 24 November, identical, and as
+predicted:** the cell is `A notifications.read_at => authenticated:UPDATE`, the
+one column grant either database had. `20261124T1555` will add `cases`' eleven
+(predicted `bb6a7648…`, 652 characters).
 
 **A migration applied to both databases moves the baseline, and the migration
 that moved it updates this table in its own pull request.** Not later, and not
 by whoever next runs the queries. The order is the one already in use: apply on
-staging, apply on production, re-run the nine queries, update the affected
+staging, apply on production, re-run the ten queries, update the affected
 rows here, commit the migration and the new baseline together.
 
 That makes the baseline part of review rather than a chore after it. A reviewer
