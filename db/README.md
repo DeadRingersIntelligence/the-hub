@@ -1791,6 +1791,24 @@ the case pages render client-side, so names that were there read as absent.
 Either would have passed or failed a page on what the server sent before the
 page ran, not on what a person sees.
 
+**Drive each control the way a person would, and when a result is empty,
+suspect the harness before the app.** Checking #28 on production (24
+November), a picker value set with JavaScript landed in the page header's
+search box, which the selector also matched, so the picker stayed empty and
+returned nothing: exactly what a broken search looks like. Typed keystrokes in
+the picker found Leslie Rosenow at once. That was the second false signal of
+the day from the harness rather than the app (fetching HTML was the first).
+
+**A pull request whose app calls a Hub function that exists on only one
+database is not independently mergeable.** The dependency runs app after Hub:
+the Hub file runs on production first, then the app PR merges and deploys,
+then its pages are loaded on production. hellophone#29's controls call
+`add_case_decedent`, `remove_case_decedent` and `set_case_arranging_person`,
+which `20261124T1555` creates; deployed before that file reached production,
+every one of those controls would fail there with "function does not exist".
+Say the dependency in the app PR, and hold it until the Hub side is on
+production.
+
 **A schema reload that doesn't fix it means it isn't the cache.** PostgREST
 caches the schema; `NOTIFY pgrst, 'reload schema';` refreshes it. If an embed
 fails after a schema change, reload once. If it still fails, the change itself
