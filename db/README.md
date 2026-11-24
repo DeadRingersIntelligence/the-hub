@@ -346,6 +346,17 @@ dropped). Measured on production after the rollback, 23 November: all nine
 exactly the rows after `T1700`, `com` `9d44258c…` and `con` `6647ecc4…`
 included, bit for bit. The rollbacks are proven clean, not believed clean.
 
+**24 November: staging rolled back too**, by
+`db/rollbacks/20261124T1500_staging_rollback_of_the_same_firm_keys.sql`, so
+hellophone#27 could be tested against single-column keys. Its dry run matched
+the reviewed values (123 keys, definitions `472f5c2a…`, 24 indexes); it
+restored the 123 keys, dropped the 24 indexes, and recorded the seven
+rollbacks through `record_rollback`, exact. Contacts was loaded on the #27
+preview afterwards and rendered its phones, relationships, case links and
+reminders. **The same-firm keys now match on both databases. They still
+differ** by `20261123T2000` and `T2005`, which have run on staging and not yet
+on production. Staging's nine have not been re-measured since its rollback.
+
 **Moved, then restored on production, by `20261123T1810`**, the first same-firm keys
 (`contact_phones -> contacts`), run on both databases on 23 November and
 identical on both afterwards, as predicted: `con` +58 (the new unique index,
