@@ -357,33 +357,30 @@ it returns `A notifications.read_at => authenticated:UPDATE` (47 characters),
 and with `20261124T1555` applied in a rolled-back transaction it adds the 11
 `cases` columns that file grants (652 characters).
 
-### The baseline, 23 November 2026
+### The baseline, 25 November 2026
 
 All of them ran identically on staging and production on 4 November 2026, for
 the first time; `com` was added on 6 November and was identical too. This is the state to diff against: a later run that differs from
 these, on either database, has found a change made since.
 
-**THE TWO DATABASES DIFFER, 23 November, evening.** `20261123T1810` and
-`T1830` to `T1835` broke the app's embeds (see "A schema change is done when
-the app works") and are **rolled back on production**, whose schema is again
-as it was after `20261123T1700`. **Staging still has all seven**, kept to
-diagnose, and reads `com` 14655, `con` 53170. The table below is
-**production's**: the rows after `T1700`, which the rollback restores exactly
-(every key to its pinned single-column text, every new index and its comment
-dropped). Measured on production after the rollback, 23 November: all nine
-exactly the rows after `T1700`, `com` `9d44258c…` and `con` `6647ecc4…`
-included, bit for bit. The rollbacks are proven clean, not believed clean.
+**Last moved by `20261123T2000`, `T2005` and `20261124T1555`**, checked
+once after the third on 25 November, **identical on both databases**, all ten
+exactly as predicted: `acl` +561 (2000's table, sequence and function, all
+API grants revoked; 1555's three functions; authenticated's INSERT and
+UPDATE on `cases` now by column), `col` +1197, `com` +424, `con` +327, `fn`
++504, `mig` +54, `trg` +200 (2000's two triggers), and `colacl` 47 → 652 (`cases`' eleven granted
+columns). `T2005` moved none of the ten: it writes rows, not schema.
 
-**24 November: staging rolled back too**, by
-`db/rollbacks/20261124T1500_staging_rollback_of_the_same_firm_keys.sql`, so
-hellophone#27 could be tested against single-column keys. Its dry run matched
-the reviewed values (123 keys, definitions `472f5c2a…`, 24 indexes); it
-restored the 123 keys, dropped the 24 indexes, and recorded the seven
-rollbacks through `record_rollback`, exact. Contacts was loaded on the #27
-preview afterwards and rendered its phones, relationships, case links and
-reminders. **The same-firm keys now match on both databases. They still
-differ** by `20261123T2000` and `T2005`, which have run on staging and not yet
-on production. Staging's nine have not been re-measured since its rollback.
+**Before that, 23 and 24 November: the same-firm keys, rolled back.**
+`20261123T1810` and `T1830` to `T1835` broke the app's embeds (see "A schema
+change is done when the app works") and were rolled back on production on
+the 23rd; the rows after `T1700` came back bit for bit, so the rollbacks were
+proven clean, not believed clean. Staging kept them to diagnose and rolled
+them back on the 24th by
+`db/rollbacks/20261124T1500_staging_rollback_of_the_same_firm_keys.sql`, whose
+dry run matched the reviewed values (123 keys, definitions `472f5c2a…`, 24
+indexes). Both databases record the seven rollbacks in `schema_rollbacks`:
+staging's exact, production's from what survived (`20261123T2005`).
 
 **Moved, then restored on production, by `20261123T1810`**, the first same-firm keys
 (`contact_phones -> contacts`), run on both databases on 23 November and
@@ -510,21 +507,20 @@ md5 and length.
 
 | query | md5 | characters |
 |---|---|---|
-| `acl` | `cde1d6c1023b99fcc74ae7e6d4f01361` | 46968 |
-| `col` | `3e5d0c0753a1d494433f7924e2e60d5c` | 78700 |
-| `com` | `9d44258c815925425bfdfc2476748d91` | 13246 |
-| `con` | `6647ecc45df510c096abd9d31a2104bc` | 51604 |
+| `acl` | `5cb568658e4b2b1dd83b57d38f8f5f3c` | 47529 |
+| `col` | `b65d5ada1cf3474d701036aee6cab698` | 79897 |
+| `com` | `f9cc25e887a392a87abfc059400841ae` | 13670 |
+| `con` | `8f37a7187b42e016fa4f02479560363f` | 51931 |
 | `defacl` | `75defde014c9c174dee94ede905dae2d` | 661 |
-| `fn` | `b6e05653c8370bb2b66ab24a8cd32510` | 15052 |
-| `mig` | `703a63ebb51590eed6688ffa916e7b82` | 17965 |
-| `trg` | `d95c17a65fc0670b4f4223cc21a76cb8` | 7183 |
+| `fn` | `3bbeec2c3265661a8298c60d8e7e0305` | 15556 |
+| `mig` | `916f96664ecef4d554ce2d8ec3da77b4` | 18019 |
+| `trg` | `3ad0791913ee6fe25126f5847e143206` | 7383 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
-| `colacl` | `77d1fee617dd5479944f8bbe49b64351` | 47 |
+| `colacl` | `bb6a764852652a15ae8c987facfb05a2` | 652 |
 
-**`colacl` measured on both databases, 24 November, identical, and as
-predicted:** the cell is `A notifications.read_at => authenticated:UPDATE`, the
-one column grant either database had. `20261124T1555` will add `cases`' eleven
-(predicted `bb6a7648…`, 652 characters).
+**`colacl` was first measured on 24 November** (`77d1fee6…`, 47 characters:
+`notifications.read_at` alone), identical on both and as predicted;
+`20261124T1555` added `cases`' eleven granted columns.
 
 **A migration applied to both databases moves the baseline, and the migration
 that moved it updates this table in its own pull request.** Not later, and not
