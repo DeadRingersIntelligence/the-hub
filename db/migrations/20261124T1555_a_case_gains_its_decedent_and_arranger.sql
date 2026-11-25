@@ -2,6 +2,18 @@
 -- 20261124T1555_a_case_gains_its_decedent_and_arranger.sql
 -- The Hub — a case's decedent and arranging person, set after the case exists.
 --
+-- APPLIED on both databases, as reviewed (commit e78b784, 40,266
+-- characters): staging on 24 November, production on 25 November. All eight
+-- lines of the verification passed on both, line 8 included (every writer of
+-- cases still works under the allowlist). On production PostgREST's schema
+-- was reloaded once after the grant change. App checked on both: staging's
+-- Contacts and case page, production's Activity and call detail; no
+-- permission errors. On production the case pages and the case write path
+-- through the UI are nothing to exercise (0 cases); the write path there is
+-- proved by line 8, inside a rolled-back transaction. This note was added
+-- afterwards; the file is otherwise as it ran. NIT for the next time it is
+-- touched: section 2 disables cases_touch without section 1 pinning it.
+--
 -- WHY (Mandie, 24 November; hellophone findings 3 and 4). A case gets its
 -- decedent through case_decedents and its arranger through
 -- cases.arranging_person_id, and nothing in the app sets either after the case
