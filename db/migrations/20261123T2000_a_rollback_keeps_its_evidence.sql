@@ -2,6 +2,13 @@
 -- 20261123T2000_a_rollback_keeps_its_evidence.sql
 -- The Hub — a rollback writes down what it removed, and when.
 --
+-- APPLIED on both databases, 24 November: staging in the morning (all five
+-- lines of the verification passed), production at 14:02:13.530046 UTC
+-- (ledger ran_len 16,647, recorded_how self: the reviewed text of commit
+-- 10a691d, pasted). This note was added afterwards; the file is otherwise as
+-- it ran. Its first use: staging's rollback of the seven same-firm files,
+-- db/rollbacks/20261124T1500, seven rows recorded exact.
+--
 -- WHAT HAPPENED (23 November). 20261123T1810 and T1830 to T1835 were rolled
 -- back on production, and the rollbacks deleted their rows from
 -- schema_migrations. The ledger then said the seven had never run, though

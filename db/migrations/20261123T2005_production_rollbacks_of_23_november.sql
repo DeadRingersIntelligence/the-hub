@@ -3,6 +3,18 @@
 -- The Hub — production's seven rollbacks of 23 November, recorded from what
 -- survived.
 --
+-- APPLIED on both databases. Staging, 24 November: 20261123T1810 was in its
+-- ledger, so it recorded nothing and said why. Production, 25 November, with
+-- the opt-in line on top of the same paste (paste md5
+-- 81b5bce447eb5b943ce7e474b8a25524, 12,354 characters, as handed off): the
+-- seven rows, both lines of the verification passing:
+--   T1810 18:13:26.142448 exact, 15,903; T1830 18:47:54 second, 45,648;
+--   T1831 18:50:31 second, 44,408; T1832 18:51:48 second, 41,966;
+--   T1833 18:53:44 second, 40,002; T1834 18:55:39 second, 45,167;
+--   T1835 18:57:32 second, 51,962; every rollback time "not captured".
+-- Production's seven rollbacks are in the database now, not only in prose.
+-- This note was added afterwards; the file is otherwise as it ran.
+--
 -- WHY A FILE OF ITS OWN. These are facts about production, not schema. They
 -- were in 20261123T2000 until review (Mandie): a database built from main
 -- runs 1810 and not T1830 to T1835 (#71 unmerged), and a file that had to
