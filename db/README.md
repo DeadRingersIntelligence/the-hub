@@ -235,7 +235,7 @@ and `20261103T1000`.
 
 ## Comparing the two databases
 
-Nine queries. Run each on both databases and compare the two cells. Each
+Ten queries. Run each on both databases and compare the two cells. Each
 returns a single cell, with `' => '` between a name and its definition and
 `' ;; '` between entries, because the editor's result grid flattens newlines
 and tabs — so a diff is a text comparison rather than a row-by-row read.
@@ -329,6 +329,34 @@ case_need_type` made a `Y case_need_type` key appear, the count went 147 → 148
 and the rollback returned it to `968257c6…`. So `Y = 0` means no type carries
 a comment, not that the query cannot see one.
 
+
+```sql
+-- colacl: column-level grants, which acl does not see
+SELECT string_agg(k || ' => ' || v, ' ;; ' ORDER BY k) FROM (SELECT 'A ' || c.relname::text || '.' || a.attname::text AS k, string_agg((CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE g.grantee::regrole::text END) || ':' || g.privilege_type, ',' ORDER BY (CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE g.grantee::regrole::text END) || ':' || g.privilege_type) AS v FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace, aclexplode(a.attacl) g WHERE n.nspname = 'public' AND a.attnum > 0 AND NOT a.attisdropped GROUP BY c.relname, a.attname) x;
+```
+
+**`colacl` closes a gap `acl` had all along** (24 November). `acl` reads
+`relacl` and `proacl`, the grants on whole tables and functions. A grant on a
+single column (`GRANT UPDATE (read_at) ON notifications`) lives in
+`pg_attribute.attacl`, which nothing read. Two of this schema's rules are
+column grants: `20261120T2300`'s `notifications.read_at`, and
+`20261124T1555`'s allowlist on `cases`. Either could drift, a column granted or
+lost on one database, with every other query identical. That's the project's
+recurring defect in its purest form: a rule stated in one place with nothing
+keeping it in step (Mandie).
+
+**No `COALESCE` here, unlike `acl`, deliberately.** A table or function with
+no explicit grant has a default (`acldefault`), and leaving it out hides the
+most permissive objects. A column has no such default: a NULL `attacl` means
+no column grant, and `aclexplode(NULL)` dropping it is right. The grants
+themselves are the cell, not hashes: there are few, and a difference reads at
+a glance.
+
+**Proved it can see one** on scratch, before any database ran it: as it stands
+it returns `A notifications.read_at => authenticated:UPDATE` (47 characters),
+and with `20261124T1555` applied in a rolled-back transaction it adds the 11
+`cases` columns that file grants (652 characters).
+
 ### The baseline, 23 November 2026
 
 All of them ran identically on staging and production on 4 November 2026, for
@@ -345,6 +373,17 @@ diagnose, and reads `com` 14655, `con` 53170. The table below is
 dropped). Measured on production after the rollback, 23 November: all nine
 exactly the rows after `T1700`, `com` `9d44258c…` and `con` `6647ecc4…`
 included, bit for bit. The rollbacks are proven clean, not believed clean.
+
+**24 November: staging rolled back too**, by
+`db/rollbacks/20261124T1500_staging_rollback_of_the_same_firm_keys.sql`, so
+hellophone#27 could be tested against single-column keys. Its dry run matched
+the reviewed values (123 keys, definitions `472f5c2a…`, 24 indexes); it
+restored the 123 keys, dropped the 24 indexes, and recorded the seven
+rollbacks through `record_rollback`, exact. Contacts was loaded on the #27
+preview afterwards and rendered its phones, relationships, case links and
+reminders. **The same-firm keys now match on both databases. They still
+differ** by `20261123T2000` and `T2005`, which have run on staging and not yet
+on production. Staging's nine have not been re-measured since its rollback.
 
 **Moved, then restored on production, by `20261123T1810`**, the first same-firm keys
 (`contact_phones -> contacts`), run on both databases on 23 November and
@@ -480,11 +519,17 @@ md5 and length.
 | `mig` | `703a63ebb51590eed6688ffa916e7b82` | 17965 |
 | `trg` | `d95c17a65fc0670b4f4223cc21a76cb8` | 7183 |
 | `typ` | `e3ed6c0716d7dabd12044464101e0b4f` | 6492 |
+| `colacl` | `77d1fee617dd5479944f8bbe49b64351` | 47 |
+
+**`colacl` measured on both databases, 24 November, identical, and as
+predicted:** the cell is `A notifications.read_at => authenticated:UPDATE`, the
+one column grant either database had. `20261124T1555` will add `cases`' eleven
+(predicted `bb6a7648…`, 652 characters).
 
 **A migration applied to both databases moves the baseline, and the migration
 that moved it updates this table in its own pull request.** Not later, and not
 by whoever next runs the queries. The order is the one already in use: apply on
-staging, apply on production, re-run the nine queries, update the affected
+staging, apply on production, re-run the ten queries, update the affected
 rows here, commit the migration and the new baseline together.
 
 That makes the baseline part of review rather than a chore after it. A reviewer
@@ -1727,6 +1772,42 @@ happened to Contacts. So for each page, name the thing that only shows if the
 changed relationship resolves (a contact's phone numbers, a call's handler,
 a case's arranging person) and check that it's there, on a row known to have
 one. "The page loaded" passes a broken embed.
+
+**No row to prove the join with is "nothing to exercise", never a pass.**
+A page with no data renders the same whether its joins work or not, so it
+proves nothing either way. Record it as nothing to exercise, and say where the
+join *was* proved, if anywhere. On 24 November hellophone#27 passed on
+production for every page with data, but production had no cases, so every
+case join there was covered only by staging's test: the first firm's first
+case is the first time those pages render real rows on production. Load one
+then. It is the 23rd's shape: a page that looks fine because it has nothing to
+render.
+
+**A sweep has to load the pages, in a browser.** Fetching each page's HTML
+and scanning it for the expected names gives false signals both ways
+(24 November, sweeping for hellophone#27): Settings applies its `?tab=`
+client-side, so every tab's HTML was identical and read as "all the same";
+the case pages render client-side, so names that were there read as absent.
+Either would have passed or failed a page on what the server sent before the
+page ran, not on what a person sees.
+
+**Drive each control the way a person would, and when a result is empty,
+suspect the harness before the app.** Checking #28 on production (24
+November), a picker value set with JavaScript landed in the page header's
+search box, which the selector also matched, so the picker stayed empty and
+returned nothing: exactly what a broken search looks like. Typed keystrokes in
+the picker found Leslie Rosenow at once. That was the second false signal of
+the day from the harness rather than the app (fetching HTML was the first).
+
+**A pull request whose app calls a Hub function that exists on only one
+database is not independently mergeable.** The dependency runs app after Hub:
+the Hub file runs on production first, then the app PR merges and deploys,
+then its pages are loaded on production. hellophone#29's controls call
+`add_case_decedent`, `remove_case_decedent` and `set_case_arranging_person`,
+which `20261124T1555` creates; deployed before that file reached production,
+every one of those controls would fail there with "function does not exist".
+Say the dependency in the app PR, and hold it until the Hub side is on
+production.
 
 **A schema reload that doesn't fix it means it isn't the cache.** PostgREST
 caches the schema; `NOTIFY pgrst, 'reload schema';` refreshes it. If an embed
